@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 
 // 入力値を管理する変数（TypeScriptの型推論が効いています）
 const email = ref('')
 const password = ref('')
 
+const router = useRouter() //ルータのインスタンス
+const auth = useAuthStore()
+
 // ログインボタンを押した時の処理
 const handleLogin = () => {
-  alert(`ログインを試みます\nメール: ${email.value}\nパスワード: ********`)
-  // 🔗 ここに後からバックエンド（Supabase/FastAPI）との連携処理を書きます
+  alert('ログイン成功！(ダッシュボードへ移動)')
+
+  auth.login('admin') // 権限での表示を変えるならここ変えて
+  router.push('/dashboard')
 }
 </script>
 
