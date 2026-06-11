@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.136.3",
+    "python-dotenv>=1.2.2",
+    "supabase>=2.31.0",
 ]
 
 [tool.fastapi]
