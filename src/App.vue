@@ -1,9 +1,3 @@
-<template>
-  <div class="app-container">
-    <RouterView />
-  </div>
-</template>
-
 <style>
 /* 画面全体の一番シンプルな共通スタイル */
 body {
@@ -16,3 +10,11 @@ body {
   min-height: 100vh;
 }
 </style>
+
+<template>
+  <UserManagement />
+</template>
+
+<script setup>
+import UserManagement from './pages/UserManagement.vue'
+</script>
