@@ -1,3 +1,6 @@
+<template>
+  <RouterView />
+</template>
 <style>
 /* 画面全体の一番シンプルな共通スタイル */
 html, body {
@@ -20,11 +23,3 @@ html, body {
   width: 100%;
 }
 </style>
-
-<template>
-  <UserManagement />
-</template>
-
-<script setup>
-import UserManagement from './pages/UserManagement.vue'
-</script>
