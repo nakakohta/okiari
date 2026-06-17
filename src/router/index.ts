@@ -1,11 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import LoginView from '@/views/LoginView.vue'
-import DashboardView from '@/views/DashboardView.vue'
-import UserManagement from '@/views/UserManagement.vue'
-import MealReportView from '@/views/MealReportView.vue'
-import DrinkRefillView from '@/views/DrinkRefillView.vue'
-import InventoryView from '@/views/InventoryView.vue'
-import PermissionSettingsView from '@/views/PermissionSettingsView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -21,42 +15,42 @@ const router = createRouter({
     {
       path: '/dashboard',
       name: 'dashboard',
-      component: DashboardView,
+      component: () => import('@/views/DashboardView.vue'),
     },
 
     // 食数報告
     {
       path: '/meal-report',
       name: 'mealreport',
-      component: MealReportView,
+      component: () => import('@/views/MealReportView.vue'),
     },
 
     // ドリンク補充
     {
       path: '/drink-supply',
       name: 'drinkreport',
-      component: DrinkRefillView,
+      component: () => import('@/views/DrinkRefillView.vue'),
     },
 
     // 棚卸
     {
       path: '/inventory',
       name: 'inventory',
-      component: InventoryView,
+      component: () => import('@/views/InventoryView.vue'),
     },
 
     // ユーザ管理
     {
       path: '/user-management',
       name: 'usermanagement',
-      component: UserManagement,
+      component: () => import('@/views/UserManagement.vue'),
     },
 
     // 権限管理
     {
       path: '/permissions',
       name: 'permissions',
-      component: PermissionSettingsView,
+      component: () => import('@/views/PermissionSettingsView.vue'),
     },
     // アクセス時はとりあえずログイン画面へ(デフォ)
     {
