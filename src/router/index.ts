@@ -46,6 +46,13 @@ const router = createRouter({
       component: () => import('@/views/UserManagement.vue'),
     },
 
+    // ユーザ追加
+    {
+      path: '/user-management/add',
+      name: 'useradd',
+      component: () => import('@/views/UserAddView.vue'),
+    },
+
     // 権限管理
     {
       path: '/permissions',

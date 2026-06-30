@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Sidebar from '../components/AppSidebar.vue'
+import AppHeader from '../components/AppHeader.vue';
 </script>
 
 <template>
@@ -7,12 +8,10 @@ import Sidebar from '../components/AppSidebar.vue'
     <Sidebar />
 
     <main class="content">
-      <div class="header">
-        <div>
-          <h1>食数報告</h1>
-          <p>食数報告確認ページ（デザイン案作成中）</p>
-        </div>
-      </div>
+      <AppHeader
+        title="食数報告"
+        description="食数報告確認ページ（デザイン案作成中）"
+      />
 
       </main>
   </div>
@@ -23,12 +22,5 @@ import Sidebar from '../components/AppSidebar.vue'
 .content {
   flex: 1;
   padding: 40px;
-}
-.header h1 {
-  font-size: 40px;
-  margin-bottom: 10px;
-}
-.header p {
-  color: #6b7280;
 }
 </style>
