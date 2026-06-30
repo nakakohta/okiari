@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { User } from '@/components/UserTable.vue'
+// import { useRouter } from 'vue-router'
 import Sidebar from '@/components/AppSidebar.vue'
 import SummaryCards from '@/components/SummaryCards.vue'
 import UserTable from '@/components/UserTable.vue'
+import AppHeader from '@/components/AppHeader.vue'
+
+// const router = useRouter()
 
 // テーブルに表示するためのデータ(FastAPIやSupabaseから取得予定)
 const userList = ref<User[]>([
@@ -20,13 +24,13 @@ const userList = ref<User[]>([
     <Sidebar />
 
     <main class="content">
-      <div class="header">
-        <div>
-          <h1>ユーザ管理</h1>
-          <p>管理者・リーダー・サブリーダー・閲覧専用ユーザの権限を確認できます</p>
-        </div>
-        <button class="add-btn">ユーザ追加</button>
-      </div>
+      <AppHeader
+        title="ユーザ管理"
+        description="管理者・リーダー・サブリーダー・閲覧専用ユーザの権限を確認できます"
+        show-button
+        button-text="新規ユーザ追加"
+        button-path="/user-management/add"
+      />
 
       <SummaryCards
         :admin-count="10"
@@ -46,29 +50,5 @@ const userList = ref<User[]>([
 .content {
   flex: 1;
   padding: 40px;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.header h1 {
-  font-size: 40px;
-  margin-bottom: 10px;
-}
-
-.header p {
-  color: #6b7280;
-}
-
-.add-btn {
-  background: #ff7a00;
-  color: white;
-  border: none;
-  padding: 14px 30px;
-  border-radius: 14px;
-  cursor: pointer;
 }
 </style>

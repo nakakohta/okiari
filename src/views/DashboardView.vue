@@ -1,6 +1,7 @@
 <script setup lang="ts">
 // import { useAuthStore } from '@/stores/auth'
 import Sidebar from '@/components/AppSidebar.vue'
+import AppHeader from '@/components/AppHeader.vue';
 
 // const auth = useAuthStore()
 </script>
@@ -10,12 +11,10 @@ import Sidebar from '@/components/AppSidebar.vue'
     <Sidebar />
 
     <main class="content">
-      <div class="header">
-        <div>
-          <h1>ダッシュボード</h1>
-          <p>全ての情報が簡単に確認できます</p>
-        </div>
-      </div>
+      <AppHeader
+        title="ダッシュボード"
+        description="今日の業務を選択してください"
+      />
     </main>
   </div>
 </template>
@@ -24,20 +23,5 @@ import Sidebar from '@/components/AppSidebar.vue'
 .content {
   flex: 1;
   padding: 40px;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.header h1 {
-  font-size: 40px;
-  margin-bottom: 10px;
-}
-
-.header p {
-  color: #6b7280;
 }
 </style>
