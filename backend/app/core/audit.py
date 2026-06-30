@@ -14,12 +14,12 @@ def write_audit_log(
     after: dict[str, Any] | None,
 ) -> None:
     payload = {
-        "actor_user_id": actor_user_id,
+        "user_id": actor_user_id,
         "target_table": target_table,
         "target_id": target_id,
         "action": action,
-        "before": before,
-        "after": after,
+        "before_data": before,
+        "after_data": after,
         "created_at": datetime.now(UTC).isoformat(),
     }
     supabase.table("audit_logs").insert(payload).execute()

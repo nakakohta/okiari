@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class RoleRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
+    id: int
     code: str
     name: str
     description: str | None = None
@@ -20,7 +20,7 @@ class UserRead(BaseModel):
     id: UUID
     display_name: str | None = None
     email: str
-    role_id: UUID
+    role_id: int
     is_active: bool
     created_at: datetime | None = None
     updated_at: datetime | None = None

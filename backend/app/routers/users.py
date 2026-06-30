@@ -4,17 +4,16 @@ from uuid import UUID
 from fastapi import APIRouter
 
 from app.core.audit import write_audit_log
-from app.core.auth import AdminOrLeaderUser, AdminUser, AuthenticatedUser
+from app.core.auth import AdminUser, AuthenticatedUser
 from app.core.db import (
     USER_SELECT,
     active_admin_count,
-    get_role,
     get_user_profile,
     require_role,
     require_user_profile,
     response_single,
 )
-from app.core.errors import conflict, forbidden, not_found
+from app.core.errors import conflict, forbidden
 from app.schemas.common import UserRead
 from app.schemas.users import UserCreate, UserRoleUpdate, UserStatusUpdate, UserUpdate
 from app.supabase_client import supabase
@@ -34,6 +33,21 @@ def _auth_user_exists(user_id: str) -> bool:
     return getattr(response, "user", None) is not None
 
 
+def _create_auth_user(email: str, password: str) -> str:
+    response = supabase.auth.admin.create_user(
+        {
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+        }
+    )
+    auth_user = getattr(response, "user", None)
+    auth_user_id = getattr(auth_user, "id", None)
+    if not auth_user_id:
+        raise conflict("Auth user could not be created")
+    return str(auth_user_id)
+
+
 def _ensure_unique_user(id_value: str, email: str, exclude_id: str | None = None) -> None:
     existing_id = get_user_profile(id_value)
     if existing_id and existing_id.get("id") != exclude_id:
@@ -51,7 +65,7 @@ def _ensure_unique_user(id_value: str, email: str, exclude_id: str | None = None
         raise conflict("User email already exists")
 
 
-def _would_remove_last_active_admin(user: dict, new_role_id: str | None = None, new_is_active: bool | None = None) -> bool:
+def _would_remove_last_active_admin(user: dict, new_role_id: int | None = None, new_is_active: bool | None = None) -> bool:
     role = user.get("role") or {}
     is_admin = role.get("code") == "admin"
     is_active = user.get("is_active") is True
@@ -70,7 +84,7 @@ def _would_remove_last_active_admin(user: dict, new_role_id: str | None = None, 
 
 
 @router.get("", response_model=list[UserRead])
-def read_users(_: AdminOrLeaderUser) -> list[dict]:
+def read_users(_: AdminUser) -> list[dict]:
     return (
         supabase.table("app_users")
         .select(USER_SELECT)
@@ -91,14 +105,20 @@ def read_user(user_id: UUID, current_user: AuthenticatedUser) -> dict:
 
 @router.post("", response_model=UserRead, status_code=201)
 def create_user(payload: UserCreate, current_user: AdminUser) -> dict:
-    user_id = str(payload.id)
-    if not _auth_user_exists(user_id):
-        raise not_found("Auth user not found")
+    if payload.id:
+        user_id = str(payload.id)
+        if not _auth_user_exists(user_id):
+            raise conflict("Auth user not found")
+    else:
+        if not payload.password:
+            raise conflict("Password is required when creating a new auth user")
+        user_id = _create_auth_user(str(payload.email), payload.password)
 
     _ensure_unique_user(user_id, str(payload.email))
-    require_role(str(payload.role_id))
+    require_role(payload.role_id)
 
-    insert_payload = payload.model_dump(mode="json")
+    insert_payload = payload.model_dump(mode="json", exclude={"password"})
+    insert_payload["id"] = user_id
     created = response_single(
         supabase.table("app_users")
         .insert(insert_payload)
@@ -154,7 +174,7 @@ def update_user(user_id: UUID, payload: UserUpdate, current_user: AdminUser) -> 
 def update_user_role(user_id: UUID, payload: UserRoleUpdate, current_user: AdminUser) -> dict:
     user_id_str = str(user_id)
     before = require_user_profile(user_id_str)
-    new_role_id = str(payload.role_id)
+    new_role_id = payload.role_id
     require_role(new_role_id)
 
     if _would_remove_last_active_admin(before, new_role_id=new_role_id):

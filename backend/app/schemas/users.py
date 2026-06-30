@@ -6,10 +6,11 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 class UserCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: UUID
-    display_name: str | None = Field(default=None, max_length=255)
+    id: UUID | None = None
+    display_name: str = Field(min_length=1, max_length=255)
     email: EmailStr
-    role_id: UUID
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+    role_id: int
     is_active: bool = True
 
 
@@ -23,7 +24,7 @@ class UserUpdate(BaseModel):
 class UserRoleUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_id: UUID
+    role_id: int
 
 
 class UserStatusUpdate(BaseModel):

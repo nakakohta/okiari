@@ -66,4 +66,5 @@ def require_roles(*allowed_codes: str):
 
 AdminUser = Annotated[CurrentUser, Depends(require_roles("admin"))]
 AdminOrLeaderUser = Annotated[CurrentUser, Depends(require_roles("admin", "leader"))]
+BusinessEditorUser = Annotated[CurrentUser, Depends(require_roles("admin", "leader", "sub_leader"))]
 AuthenticatedUser = Annotated[CurrentUser, Depends(get_current_user)]

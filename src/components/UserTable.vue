@@ -1,50 +1,71 @@
 <script setup lang="ts">
-// 1ユーザの型定義
-interface User {
-  name: string
-  role: 'admin' | 'leader' | 'subLeader' | 'viewer'
-  roleLabel: string
-  dept: string
-  status: string
-}
+import type { AppUser, Role } from '@/lib/types'
 
-// ユーザの配列を親から受け取る設定
 defineProps<{
-  users: User[]
+  users: AppUser[]
+  roles: Role[]
+  busyUserId?: string | null
 }>()
+
+defineEmits<{
+  roleChange: [userId: string, roleId: number]
+  statusChange: [userId: string, isActive: boolean]
+}>()
+
+function roleClass(code?: string) {
+  return {
+    admin: code === 'admin',
+    leader: code === 'leader',
+    sub: code === 'sub_leader',
+    viewer: code === 'viewer',
+  }
+}
 </script>
 
 <template>
   <div class="table-card">
-    <h2>ユーザー一覧</h2>
+    <h2>ユーザ一覧</h2>
     <table>
       <thead>
         <tr>
           <th>名前</th>
+          <th>メール</th>
           <th>権限</th>
-          <th>担当</th>
           <th>状態</th>
-          <th>最終更新</th>
+          <th>更新日時</th>
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(user, index) in users" :key="index">
-          <td>{{ user.name }}</td>
-          <td :class="{
-            'admin': user.role ==='admin',
-            'leader': user.role ==='leader',
-            'sub': user.role === 'subLeader',
-            'gray-text': user.role === 'viewer'
-          }">
-          {{ user.roleLabel }}
-        </td>
-        <td>{{ user.dept }}</td>
-        <td>
-          <span class="status" :class="user.status === '有効' ? 'active-status' : 'inactive-status'">
-            {{ user.status }}
-          </span>
-        </td>
-        <td>18:05</td>
+        <tr v-for="user in users" :key="user.id">
+          <td>{{ user.display_name || '-' }}</td>
+          <td>{{ user.email }}</td>
+          <td>
+            <select
+              :value="user.role_id"
+              :disabled="busyUserId === user.id"
+              :class="roleClass(user.role?.code)"
+              @change="$emit('roleChange', user.id, Number(($event.target as HTMLSelectElement).value))"
+            >
+              <option v-for="role in roles" :key="role.id" :value="role.id">
+                {{ role.name }}
+              </option>
+            </select>
+          </td>
+          <td>
+            <button
+              type="button"
+              class="status"
+              :class="user.is_active ? 'active-status' : 'inactive-status'"
+              :disabled="busyUserId === user.id"
+              @click="$emit('statusChange', user.id, !user.is_active)"
+            >
+              {{ user.is_active ? '有効' : '停止' }}
+            </button>
+          </td>
+          <td>{{ user.updated_at ? new Date(user.updated_at).toLocaleString() : '-' }}</td>
+        </tr>
+        <tr v-if="users.length === 0">
+          <td colspan="5" class="empty">ユーザが登録されていません</td>
         </tr>
       </tbody>
     </table>
@@ -52,29 +73,76 @@ defineProps<{
 </template>
 
 <style scoped>
-/* UserManagement.vueからテーブルに関するCSSだけを引っ越し */
 .table-card {
   background: white;
-  margin-top: 40px;
-  padding: 30px;
-  border-radius: 24px;
+  padding: 24px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
 }
+
+.table-card h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+  font-weight: 800;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
-  margin-top: 20px;
 }
-th, td {
-  padding: 18px;
+
+th,
+td {
+  padding: 14px;
   text-align: left;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid #eef2f7;
 }
-thead { background: #f1f5f9; }
-.admin { color: red; font-weight: bold; }
-.leader { color: #2563ff; font-weight: bold; }
-.sub { color: #16a34a; font-weight: bold; }
-.gray-text { color: #6b7280; font-weight: bold; }
-.status { padding: 6px 14px; border-radius: 20px; font-size: 13px; }
-.active-status { background: #dcfce7; color: #16a34a; }
-.inactive-status { background: #fee2e2; color: #ef4444; }
+
+thead {
+  background: #f8fafc;
+}
+
+select {
+  min-width: 140px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-weight: 700;
+}
+
+.admin {
+  color: #dc2626;
+}
+.leader {
+  color: #2563eb;
+}
+.sub {
+  color: #16a34a;
+}
+.viewer {
+  color: #64748b;
+}
+
+.status {
+  border: none;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.active-status {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.inactive-status {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.empty {
+  color: #64748b;
+  text-align: center;
+}
 </style>
