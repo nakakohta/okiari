@@ -1,66 +1,89 @@
 <script setup lang="ts">
-// 外部(親画面)から人数データを受け取るための型定義
-interface Props {
-  adminCount: number
-  leaderCount: number
-  subLeaderCount: number
-  viewerCount: number
-}
-
-// 初期値(デフォルト値)を設定しつつ定義
-withDefaults(defineProps<Props>(), {
-  adminCount: 0,
-  leaderCount: 0,
-  subLeaderCount: 0,
-  viewerCount: 0
-})
+withDefaults(
+  defineProps<{
+    adminCount: number
+    leaderCount: number
+    subLeaderCount: number
+    viewerCount: number
+  }>(),
+  {
+    adminCount: 0,
+    leaderCount: 0,
+    subLeaderCount: 0,
+    viewerCount: 0,
+  },
+)
 </script>
 
 <template>
   <div class="cards">
     <div class="card">
       <h3>管理者</h3>
-      <h2 class="orange">{{ adminCount }}名</h2>
-      <p>上限人数</p>
+      <strong class="orange">{{ adminCount }}名</strong>
+      <p>全体管理</p>
     </div>
-
     <div class="card">
       <h3>リーダー</h3>
-      <h2 class="blue">{{ leaderCount }}名</h2>
-      <p>上限人数</p>
+      <strong class="blue">{{ leaderCount }}名</strong>
+      <p>業務編集</p>
     </div>
-
     <div class="card">
       <h3>サブリーダー</h3>
-      <h2 class="green">{{ subLeaderCount }}名</h2>
-      <p>上限人数</p>
+      <strong class="green">{{ subLeaderCount }}名</strong>
+      <p>業務編集</p>
     </div>
-
     <div class="card">
       <h3>閲覧専用</h3>
-      <h2 class="gray">{{ viewerCount }}名</h2>
-      <p>上限人数</p>
+      <strong class="gray">{{ viewerCount }}名</strong>
+      <p>閲覧のみ</p>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* UserManagement.vueからカードに関するCSSだけを引っ越し */
 .cards {
-  display: flex;
-  gap: 20px;
-  margin-top: 40px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 16px;
+  margin: 28px 0;
 }
+
 .card {
   background: white;
-  width: 220px;
-  padding: 25px;
-  border-radius: 20px;
-  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.02); /* 少し影を足すと綺麗です */
+  padding: 20px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
 }
-.card h2 { font-size: 36px; }
-.orange { color: #ff7a00; }
-.blue { color: #2563ff; }
-.green { color: #16a34a; }
-.gray { color: #6b7280; }
+
+.card h3 {
+  margin: 0 0 10px;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.card strong {
+  display: block;
+  font-size: 30px;
+  line-height: 1.2;
+}
+
+.card p {
+  margin: 8px 0 0;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.orange {
+  color: #ff7a00;
+}
+.blue {
+  color: #2563eb;
+}
+.green {
+  color: #16a34a;
+}
+.gray {
+  color: #64748b;
+}
 </style>
