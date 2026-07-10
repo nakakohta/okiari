@@ -33,7 +33,7 @@ async function load() {
     users.value = userData
     roles.value = roleData
   } catch {
-    errorMessage.value = 'ユーザ情報を取得できませんでした'
+    errorMessage.value = 'ユーザー情報を取得できませんでした'
   } finally {
     loading.value = false
   }
@@ -74,10 +74,10 @@ onMounted(load)
 
     <main class="content">
       <AppHeader
-        title="ユーザ管理"
-        description="管理者・リーダー・サブリーダー・閲覧専用ユーザを管理します。"
+        title="ユーザー管理"
+        description="管理者・リーダー・サブリーダー・閲覧専用ユーザーを管理します。"
         show-button
-        button-text="新規ユーザ追加"
+        button-text="新規ユーザー追加"
         button-path="/user-management/add"
       />
 

@@ -48,21 +48,32 @@ def _create_auth_user(email: str, password: str) -> str:
     return str(auth_user_id)
 
 
-def _ensure_unique_user(id_value: str, email: str, exclude_id: str | None = None) -> None:
-    existing_id = get_user_profile(id_value)
-    if existing_id and existing_id.get("id") != exclude_id:
-        raise conflict("User id already exists")
+def _delete_auth_user(user_id: str) -> None:
+    try:
+        supabase.auth.admin.delete_user(user_id)
+    except Exception:
+        pass
 
-    existing_email = (
+
+def _ensure_unique_email(email: str, exclude_id: str | None = None) -> None:
+    response = (
         supabase.table("app_users")
         .select("id")
         .eq("email", email)
         .maybe_single()
         .execute()
-        .data
     )
+    existing_email = getattr(response, "data", None)
     if existing_email and existing_email.get("id") != exclude_id:
         raise conflict("User email already exists")
+
+
+def _ensure_unique_user(id_value: str, email: str, exclude_id: str | None = None) -> None:
+    existing_id = get_user_profile(id_value)
+    if existing_id and existing_id.get("id") != exclude_id:
+        raise conflict("User id already exists")
+
+    _ensure_unique_email(email, exclude_id=exclude_id)
 
 
 def _would_remove_last_active_admin(user: dict, new_role_id: int | None = None, new_is_active: bool | None = None) -> bool:
@@ -105,28 +116,37 @@ def read_user(user_id: UUID, current_user: AuthenticatedUser) -> dict:
 
 @router.post("", response_model=UserRead, status_code=201)
 def create_user(payload: UserCreate, current_user: AdminUser) -> dict:
+    email = str(payload.email)
+    require_role(payload.role_id)
+    auth_user_created = False
+
     if payload.id:
         user_id = str(payload.id)
         if not _auth_user_exists(user_id):
             raise conflict("Auth user not found")
+        _ensure_unique_user(user_id, email)
     else:
+        _ensure_unique_email(email)
         if not payload.password:
             raise conflict("Password is required when creating a new auth user")
-        user_id = _create_auth_user(str(payload.email), payload.password)
-
-    _ensure_unique_user(user_id, str(payload.email))
-    require_role(payload.role_id)
+        user_id = _create_auth_user(email, payload.password)
+        auth_user_created = True
 
     insert_payload = payload.model_dump(mode="json", exclude={"password"})
     insert_payload["id"] = user_id
-    created = response_single(
-        supabase.table("app_users")
-        .insert(insert_payload)
-        .select(USER_SELECT)
-        .single()
-        .execute(),
-        "User was created but could not be read",
-    )
+    try:
+        created = response_single(
+            supabase.table("app_users")
+            .insert(insert_payload)
+            .select(USER_SELECT)
+            .execute(),
+            "User was created but could not be read",
+        )
+    except Exception:
+        if auth_user_created:
+            _delete_auth_user(user_id)
+        raise
+
     write_audit_log(
         actor_user_id=current_user.auth_user_id,
         target_table="app_users",
@@ -155,7 +175,6 @@ def update_user(user_id: UUID, payload: UserUpdate, current_user: AdminUser) -> 
         .update(updates)
         .eq("id", user_id_str)
         .select(USER_SELECT)
-        .single()
         .execute(),
         "User was updated but could not be read",
     )
@@ -185,7 +204,6 @@ def update_user_role(user_id: UUID, payload: UserRoleUpdate, current_user: Admin
         .update({"role_id": new_role_id, "updated_at": _now()})
         .eq("id", user_id_str)
         .select(USER_SELECT)
-        .single()
         .execute(),
         "User role was updated but could not be read",
     )
@@ -213,7 +231,6 @@ def update_user_status(user_id: UUID, payload: UserStatusUpdate, current_user: A
         .update({"is_active": payload.is_active, "updated_at": _now()})
         .eq("id", user_id_str)
         .select(USER_SELECT)
-        .single()
         .execute(),
         "User status was updated but could not be read",
     )

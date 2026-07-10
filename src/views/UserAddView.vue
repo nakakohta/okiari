@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { AxiosError } from 'axios'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
@@ -15,6 +16,22 @@ const isActive = ref(true)
 const saving = ref(false)
 const errorMessage = ref('')
 
+function getCreateUserErrorMessage(error: unknown) {
+  if (error instanceof AxiosError) {
+    const detail = error.response?.data?.detail
+    if (detail === 'User email already exists') {
+      return 'このメールアドレスはすでに登録されています'
+    }
+    if (detail === 'Password is required when creating a new auth user') {
+      return '初期パスワードを入力してください'
+    }
+    if (detail === 'Role not found') {
+      return '選択した権限が見つかりません'
+    }
+  }
+  return 'ユーザーを登録できませんでした'
+}
+
 async function loadRoles() {
   try {
     roles.value = await roleService.list()
@@ -29,6 +46,11 @@ async function handleAddUser() {
     errorMessage.value = '権限を選択してください'
     return
   }
+  if (password.value.length < 8) {
+    errorMessage.value = '初期パスワードは8文字以上で入力してください'
+    return
+  }
+
   saving.value = true
   errorMessage.value = ''
   try {
@@ -40,8 +62,8 @@ async function handleAddUser() {
       is_active: isActive.value,
     })
     router.push('/user-management')
-  } catch {
-    errorMessage.value = 'ユーザを登録できませんでした'
+  } catch (error) {
+    errorMessage.value = getCreateUserErrorMessage(error)
   } finally {
     saving.value = false
   }
@@ -53,14 +75,14 @@ onMounted(loadRoles)
 <template>
   <div class="layout add-layout">
     <main class="main-container">
-      <AppHeader title="ユーザ追加" description="Supabase Authユーザとアプリユーザを同時に作成します。" />
+      <AppHeader title="ユーザー追加" description="メールアドレスと初期パスワードでログインできるユーザーを作成します。" />
 
       <form class="form-container" @submit.prevent="handleAddUser">
         <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
 
         <label>
           名前
-          <input v-model="displayName" type="text" placeholder="名前" required />
+          <input v-model="displayName" type="text" placeholder="山田 太郎" required />
         </label>
 
         <label>
@@ -70,7 +92,14 @@ onMounted(loadRoles)
 
         <label>
           初期パスワード
-          <input v-model="password" type="password" minlength="8" placeholder="8文字以上" required />
+          <input
+            v-model="password"
+            type="password"
+            minlength="8"
+            autocomplete="new-password"
+            placeholder="8文字以上"
+            required
+          />
         </label>
 
         <label>
@@ -83,7 +112,7 @@ onMounted(loadRoles)
 
         <label class="checkbox">
           <input v-model="isActive" type="checkbox" />
-          有効ユーザとして登録する
+          有効ユーザーとして登録する
         </label>
 
         <div class="actions">
@@ -155,6 +184,11 @@ button {
 button.secondary {
   background: #e2e8f0;
   color: #334155;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: wait;
 }
 
 .error {
