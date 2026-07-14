@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { RouterLink, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { ref } from 'vue'
+const mealMenuOpen = ref(false)
+const drinkMenuOpen = ref(false)
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -20,8 +23,34 @@ async function logout() {
 
     <nav class="nav-list">
       <RouterLink to="/dashboard" active-class="active">ダッシュボード</RouterLink>
-      <RouterLink to="/meal-report" active-class="active">食数報告</RouterLink>
-      <RouterLink to="/drink-supply" active-class="active">ドリンク補充</RouterLink>
+      <div class="menu-group">
+        <button
+          class="menu-button"
+          @click="mealMenuOpen = !mealMenuOpen"
+        >
+          食数報告
+          <span>{{ mealMenuOpen ? "▲" : "▼" }}</span>
+        </button>
+
+        <div v-if="mealMenuOpen" class="submenu">
+          <RouterLink to="/meal-report-drink">ドリンク売店</RouterLink>
+          <RouterLink to="/meal-report-food">フード売店</RouterLink>
+        </div>
+      </div>
+      <div class="menu-group">
+        <button
+          class="menu-button"
+          @click="drinkMenuOpen = !drinkMenuOpen"
+        >
+          ドリンク補充
+          <span>{{ drinkMenuOpen ? "▲" : "▼" }}</span>
+        </button>
+
+        <div v-if="drinkMenuOpen" class="submenu">
+          <RouterLink to="/drink-supply-drink">ドリンク補充</RouterLink>
+          <RouterLink to="/drink-supply-pop">ポップコーン</RouterLink>
+        </div>
+      </div>
       <RouterLink to="/inventory" active-class="active">棚卸</RouterLink>
       <RouterLink v-if="auth.canManage" to="/user-management" active-class="active">ユーザ管理</RouterLink>
       <RouterLink v-if="auth.canManage" to="/permissions" active-class="active">権限設定</RouterLink>
@@ -111,5 +140,37 @@ async function logout() {
   border-radius: 8px;
   padding: 10px;
   cursor: pointer;
+}
+
+.menu-button {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #cbd5e1;
+  padding: 12px 14px;
+  border-radius: 8px;
+  text-align: left;
+  font-weight: 700;
+  cursor: pointer;
+
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.menu-button:hover {
+  background: #ff7a00;
+  color: white;
+}
+
+.submenu {
+  display: flex;
+  flex-direction: column;
+  margin-left: 20px;
+}
+
+.submenu a {
+  padding: 8px 14px;
+  font-size: 14px;
 }
 </style>

@@ -17,15 +17,27 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
-      path: '/meal-report',
-      name: 'mealreport',
-      component: () => import('@/views/MealReportView.vue'),
+      path: '/meal-report-drink',
+      name: 'mealreport-drink',
+      component: () => import('@/views/MealReport_drinkView.vue'),
       meta: { requiresAuth: true },
     },
     {
-      path: '/drink-supply',
-      name: 'drinkreport',
-      component: () => import('@/views/DrinkRefillView.vue'),
+      path: '/meal-report-food',
+      name: 'mealreport-food',
+      component: () => import('@/views/MealReport_foodView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/drink-supply-drink',
+      name: 'drinkreport-drink',
+      component: () => import('@/views/DrinkRefill_drinkView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/drink-supply-pop',
+      name: 'drinkreport-pop',
+      component: () => import('@/views/DrinkRefill_popView.vue'),
       meta: { requiresAuth: true },
     },
     {
