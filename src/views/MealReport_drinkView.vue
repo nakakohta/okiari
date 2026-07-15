@@ -70,70 +70,67 @@ onMounted(load)
   <div class="layout">
     <Sidebar />
     <main class="content">
-      <AppHeader title="食数報告" description="場所・商品ごとの食数を登録します。" />
+      <AppHeader title="食数報告(ドリンク)" description="場所・商品ごとの食数を登録します。" />
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
       <p v-if="loading" class="muted">読み込み中...</p>
 
       <form class="panel form-grid" @submit.prevent="save">
-        <label>
-          日付
-          <input v-model="reportDate" type="date" required />
-        </label>
-        <label>
-          場所
-          <select v-model.number="storeId" required>
-            <option value="" disabled>選択してください</option>
-            <option v-for="store in stores" :key="store.id" :value="store.id">{{ store.name }}</option>
-          </select>
-        </label>
-        <label>
-          商品
-          <select v-model.number="productId" required>
-            <option value="" disabled>選択してください</option>
-            <option v-for="product in products" :key="product.id" :value="product.id">
-              {{ product.name }} / {{ product.unit }}
-            </option>
-          </select>
-        </label>
-        <label>
-          数量
-          <input v-model.number="quantity" type="number" min="0" required />
-        </label>
-        <label class="wide">
-          メモ
-          <input v-model="note" type="text" placeholder="任意" />
-        </label>
-        <button type="submit" :disabled="saving || !auth.canEditReports">
-          {{ auth.canEditReports ? (saving ? '保存中...' : '保存') : '閲覧のみ' }}
-        </button>
-      </form>
-
-      <section class="panel">
-        <h2>報告一覧</h2>
         <table>
-          <thead>
-            <tr>
-              <th>日付</th>
-              <th>場所</th>
-              <th>商品</th>
-              <th>数量</th>
-              <th>メモ</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="report in reports" :key="report.id">
-              <td>{{ report.report_date }}</td>
-              <td>{{ report.store?.name || '-' }}</td>
-              <td>{{ report.product?.name || '-' }}</td>
-              <td>{{ report.quantity }}{{ report.product?.unit || '' }}</td>
-              <td>{{ report.note || '-' }}</td>
-            </tr>
-            <tr v-if="reports.length === 0">
-              <td colspan="5" class="empty">報告はまだありません</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
+  <thead>
+    <tr>
+      <th>操作</th>
+      <th>商品名</th>
+      <th>前回数</th>
+      <th>追加数</th>
+      <th>備考</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    <tr
+      v-for="(item, index) in items"
+      :key="index"
+    >
+      <td>
+        <button
+          class="delete-btn"
+          @click="deleteRow(index)"
+        >
+          削除
+        </button>
+      </td>
+
+      <td>
+        <input
+          v-model="item.name"
+          placeholder="商品名"
+        />
+      </td>
+
+      <td>
+        <input
+          type="number"
+          v-model.number="item.previous"
+        />
+      </td>
+
+      <td>
+        <input
+          type="number"
+          v-model.number="item.add"
+        />
+      </td>
+
+      <td>
+        <input
+          v-model="item.memo"
+          placeholder="備考"
+        />
+      </td>
+    </tr>
+  </tbody>
+</table>
+      </form>
     </main>
   </div>
 </template>
