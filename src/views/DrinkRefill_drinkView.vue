@@ -5,6 +5,7 @@ import Sidebar from '@/components/AppSidebar.vue'
 import { mastersService, reportService } from '@/lib/services'
 import { useAuthStore } from '@/stores/auth'
 import type { Product, RestockReport, RestockStatus, Store } from '@/lib/types'
+import DTable from '@/components/RestockTable/DTable.vue'
 
 const statusLabels: Record<RestockStatus, string> = {
   requested: '依頼',
@@ -83,88 +84,140 @@ onMounted(load)
 
 <template>
   <div class="layout">
-    <Sidebar />
-    <main class="content">
-      <AppHeader title="ドリンク補充" description="ドリンク補充依頼を登録し、対応状況を管理します。" />
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="loading" class="muted">読み込み中...</p>
+  <Sidebar />
+  <main class="content">
+    <div class="meal-report">
 
-      <form class="panel form-grid" @submit.prevent="save">
-        <label>
-          場所
-          <select v-model.number="storeId" required>
-            <option value="" disabled>選択してください</option>
-            <option v-for="store in stores" :key="store.id" :value="store.id">{{ store.name }}</option>
-          </select>
-        </label>
-        <label>
-          商品
-          <select v-model.number="productId" required>
-            <option value="" disabled>選択してください</option>
-            <option v-for="product in products" :key="product.id" :value="product.id">
-              {{ product.name }} / {{ product.unit }}
-            </option>
-          </select>
-        </label>
-        <label>
-          数量
-          <input v-model.number="quantity" type="number" min="1" required />
-        </label>
-        <label class="wide">
-          メモ
-          <input v-model="note" type="text" placeholder="任意" />
-        </label>
-        <button type="submit" :disabled="saving || !auth.canEditReports">
-          {{ auth.canEditReports ? (saving ? '保存中...' : '依頼する') : '閲覧のみ' }}
-        </button>
-      </form>
+      <!-- 目次 -->
+      <div class="store-menu">
+        <h1>売店一覧</h1>
 
-      <section class="panel">
-        <h2>補充依頼一覧</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>依頼日時</th>
-              <th>場所</th>
-              <th>商品</th>
-              <th>数量</th>
-              <th>状態</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="report in reports" :key="report.id">
-              <td>{{ new Date(report.requested_at).toLocaleString() }}</td>
-              <td>{{ report.store?.name || '-' }}</td>
-              <td>{{ report.product?.name || '-' }}</td>
-              <td>{{ report.quantity }}{{ report.product?.unit || '' }}</td>
-              <td>
-                <span class="status" :class="report.status">{{ statusLabels[report.status] }}</span>
-              </td>
-              <td class="actions">
-                <button
-                  v-for="status in Object.keys(statusLabels) as RestockStatus[]"
-                  :key="status"
-                  type="button"
-                  class="secondary"
-                  :disabled="!auth.canEditReports || report.status === status"
-                  @click="updateStatus(report, status)"
-                >
-                  {{ statusLabels[status] }}
-                </button>
-              </td>
-            </tr>
-            <tr v-if="reports.length === 0">
-              <td colspan="6" class="empty">補充依頼はまだありません</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="store-links">
+          <a href="#csl">CSL</a>
+          <a href="#store2-1">2-1</a>
+          <a href="#store2-2">2-2</a>
+          <a href="#store2-7">2-7</a>
+          <a href="#store2-8">2-8</a>
+          <a href="#store3-1">3-1</a>
+          <a href="#store3-5">3-5</a>
+          <a href="#store3-9">3-9</a>
+          <a href="#store3-11">3-11</a>
+        </div>
+      </div>
+
+      <!-- CSL -->
+      <section id="csl" class="store-section">
+        <h2 class="store-title">
+          CSL（コートサイドラウンジ）
+        </h2>
+
+        <h3>ドリンク補充</h3>
+        <DTable title="ドリンク補充" />
+
+
+        <h3>消耗品補充</h3>
+        <DTable title="ドリンク補充" />
       </section>
-    </main>
-  </div>
+
+      <!-- 2-1 -->
+      <section id="store2-1" class="store-section">
+        <h2 class="store-title">2-1</h2>
+
+        <h3>ドリンク補充</h3>
+        <DTable title="ドリンク補充" />
+
+        <h3>消耗品補充</h3>
+        <DTable title="ドリンク補充" />
+      </section>
+
+      <!-- 2-2 -->
+      <section id="store2-2" class="store-section">
+        <h2 class="store-title">2-2</h2>
+
+        <h3>ドリンク補充</h3>
+        <DTable title="ドリンク補充" />
+
+        <h3>消耗品補充</h3>
+        <DTable title="ドリンク補充" />
+      </section>
+
+      <!-- 2-7 -->
+      <section id="store2-7" class="store-section">
+        <h2 class="store-title">2-7</h2>
+
+        <h3>ドリンク補充</h3>
+        <DTable title="ドリンク補充" />
+
+        <h3>消耗品補充</h3>
+        <DTable title="ドリンク補充" />
+      </section>
+
+      <!-- 2-8 -->
+      <section id="store2-8" class="store-section">
+        <h2 class="store-title">2-8</h2>
+
+        <h3>ドリンク補充</h3>
+        <DTable title="ドリンク補充" />
+
+        <h3>消耗品補充</h3>
+        <DTable title="ドリンク補充" />
+      </section>
+
+      <!-- 3-1 -->
+      <section id="store3-1" class="store-section">
+        <h2 class="store-title">3-1</h2>
+
+        <h3>ドリンク補充</h3>
+        <DTable title="ドリンク補充" />
+
+        <h3>消耗品補充</h3>
+        <DTable title="ドリンク補充" />
+      </section>
+
+      <!-- 3-5 -->
+      <section id="store3-5" class="store-section">
+        <h2 class="store-title">3-5</h2>
+
+          <h3>ドリンク補充</h3>
+          <DTable title="ドリンク補充" />
+
+          <h3>消耗品補充</h3>
+          <DTable title="ドリンク補充" />
+        </section>
+
+        <!-- 3-9 -->
+        <section id="store3-9" class="store-section">
+          <h2 class="store-title">3-9</h2>
+
+          <h3>ドリンク補充</h3>
+          <DTable title="ドリンク補充" />
+
+          <h3>消耗品補充</h3>
+          <DTable title="ドリンク補充" />
+        </section>
+
+        <!-- 3-11 -->
+        <section id="store3-11" class="store-section">
+          <h2 class="store-title">
+            3-11（スイートラウンジ）
+          </h2>
+
+          <h3>ドリンク補充</h3>
+          <DTable title="ドリンク補充" />
+
+          <h3>消耗品補充</h3>
+          <DTable title="ドリンク補充" />
+        </section>
+      </div>
+      </main>
+    </div>
 </template>
 
 <style scoped>
+.layout{
+  display:flex;
+  min-height:100vh;
+}
 .content {
   flex: 1;
   padding: 40px;
@@ -283,4 +336,51 @@ td {
   padding: 10px 12px;
   border-radius: 8px;
 }
+.meal-report {
+  padding: 30px;
+  background: #f5f7fa;
+}
+
+.store-menu {
+  background: white;
+  padding: 25px;
+  border-radius: 12px;
+  margin-bottom: 40px;
+}
+
+.store-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 15px;
+}
+
+.store-links a {
+  text-decoration: none;
+  background: #2f6df6;
+  color: white;
+  padding: 10px 18px;
+  border-radius: 8px;
+}
+
+.store-section {
+  margin-bottom: 80px;
+}
+
+.store-title {
+  font-size: 32px;
+  margin-bottom: 25px;
+  border-left: 6px solid #2f6df6;
+  padding-left: 15px;
+}
+
+h3 {
+  margin-top: 30px;
+  margin-bottom: 15px;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
 </style>

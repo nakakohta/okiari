@@ -85,7 +85,7 @@ onMounted(load)
   <div class="layout">
     <Sidebar />
     <main class="content">
-      <AppHeader title="ドリンク補充" description="ドリンク補充依頼を登録し、対応状況を管理します。" />
+      <AppHeader title="ポップコーン" description="ドリンク補充依頼を登録し、対応状況を管理します。" />
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
       <p v-if="loading" class="muted">読み込み中...</p>
 
