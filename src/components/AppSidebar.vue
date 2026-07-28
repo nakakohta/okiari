@@ -1,12 +1,29 @@
 <script setup lang="ts">
-import { RouterLink, useRouter } from 'vue-router'
+import { RouterLink, useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { ref } from 'vue'
-const mealMenuOpen = ref(false)
-const drinkMenuOpen = ref(false)
+import { useSidebarStore } from '@/stores/sidebar'
+import { computed } from 'vue'
 
 const auth = useAuthStore()
+const sidebar = useSidebarStore()
+
 const router = useRouter()
+const route = useRoute()
+
+// 現在のURLなら必ず開く
+const mealMenuOpen = computed(() => {
+  return (
+    sidebar.mealMenuOpen ||
+    route.path.startsWith('/meal-report')
+  )
+})
+
+const drinkMenuOpen = computed(() => {
+  return (
+    sidebar.drinkMenuOpen ||
+    route.path.startsWith('/drink-supply')
+  )
+})
 
 async function logout() {
   await auth.logout()
@@ -26,29 +43,35 @@ async function logout() {
       <div class="menu-group">
         <button
           class="menu-button"
-          @click="mealMenuOpen = !mealMenuOpen"
+          :class="{
+            active: route.path.startsWith('/meal-report')
+          }"
+          @click="sidebar.toggleMealMenu()"
         >
           食数報告
           <span>{{ mealMenuOpen ? "▲" : "▼" }}</span>
         </button>
 
         <div v-if="mealMenuOpen" class="submenu">
-          <RouterLink to="/meal-report-drink">ドリンク売店</RouterLink>
-          <RouterLink to="/meal-report-food">フード売店</RouterLink>
+          <RouterLink to="/meal-report-drink" active-class="active">ドリンク売店</RouterLink>
+          <RouterLink to="/meal-report-food" active-class="active">フード売店</RouterLink>
         </div>
       </div>
       <div class="menu-group">
         <button
           class="menu-button"
-          @click="drinkMenuOpen = !drinkMenuOpen"
+          :class="{
+            active: route.path.startsWith('/drink-supply')
+          }"
+          @click="sidebar.toggleDrinkMenu()"
         >
           ドリンク補充
           <span>{{ drinkMenuOpen ? "▲" : "▼" }}</span>
         </button>
 
         <div v-if="drinkMenuOpen" class="submenu">
-          <RouterLink to="/drink-supply-drink">ドリンク補充</RouterLink>
-          <RouterLink to="/drink-supply-pop">ポップコーン</RouterLink>
+          <RouterLink to="/drink-supply-drink" active-class="active">ドリンク補充</RouterLink>
+          <RouterLink to="/drink-supply-pop" active-class="active">ポップコーン</RouterLink>
         </div>
       </div>
       <RouterLink to="/inventory" active-class="active">棚卸</RouterLink>
@@ -66,6 +89,9 @@ async function logout() {
 
 <style scoped>
 .sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
   width: 260px;
   background-color: #0d1b2a;
   color: white;
