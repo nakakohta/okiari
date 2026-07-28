@@ -345,7 +345,7 @@ function drop(index: number) {
               </div>
             </td>
 
-            
+
             <td class="notes-cell">
               <textarea
                 v-model="item.notes"
@@ -369,6 +369,12 @@ function drop(index: number) {
 </template>
 
 <style scoped>
+.content {
+  flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
 .mf-table {
   padding: 20px;
   border-radius: 24px;
@@ -398,7 +404,6 @@ function drop(index: number) {
 
 .table {
   width: 100%;
-  min-width: 1200px;
   border-collapse: separate;
   border-spacing: 0;
   background: #fff;

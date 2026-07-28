@@ -93,6 +93,8 @@ async function logout() {
   top: 0;
   height: 100vh;
   width: 260px;
+  min-width: 260px;
+  flex-shrink: 0;
   background-color: #0d1b2a;
   color: white;
   padding: 24px;
