@@ -24,7 +24,7 @@ function roleClass(code?: string) {
 
 <template>
   <div class="table-card">
-    <h2>ユーザ一覧</h2>
+    <h2>ユーザー一覧</h2>
     <table>
       <thead>
         <tr>
@@ -65,7 +65,7 @@ function roleClass(code?: string) {
           <td>{{ user.updated_at ? new Date(user.updated_at).toLocaleString() : '-' }}</td>
         </tr>
         <tr v-if="users.length === 0">
-          <td colspan="5" class="empty">ユーザが登録されていません</td>
+          <td colspan="5" class="empty">ユーザーが登録されていません</td>
         </tr>
       </tbody>
     </table>

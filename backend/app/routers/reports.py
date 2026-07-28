@@ -48,7 +48,7 @@ def _now() -> str:
 
 
 def _require_product(product_id: int, category: str) -> None:
-    product = (
+    response = (
         supabase.table("products")
         .select("id")
         .eq("id", product_id)
@@ -56,49 +56,49 @@ def _require_product(product_id: int, category: str) -> None:
         .eq("is_active", True)
         .maybe_single()
         .execute()
-        .data
     )
+    product = getattr(response, "data", None)
     if not product:
         raise not_found(f"Active {category} product not found")
 
 
 def _require_store(store_id: int) -> None:
-    store = (
+    response = (
         supabase.table("stores")
         .select("id")
         .eq("id", store_id)
         .eq("is_active", True)
         .maybe_single()
         .execute()
-        .data
     )
+    store = getattr(response, "data", None)
     if not store:
         raise not_found("Active store not found")
 
 
 def _current_inventory_quantity(store_id: int, product_id: int) -> int:
-    inventory = (
+    response = (
         supabase.table("inventories")
         .select("quantity")
         .eq("store_id", store_id)
         .eq("product_id", product_id)
         .maybe_single()
         .execute()
-        .data
     )
+    inventory = getattr(response, "data", None)
     return int(inventory["quantity"]) if inventory else 0
 
 
 def _replace_inventory(store_id: int, product_id: int, quantity: int, user_id: str) -> None:
-    existing = (
+    response = (
         supabase.table("inventories")
         .select("id")
         .eq("store_id", store_id)
         .eq("product_id", product_id)
         .maybe_single()
         .execute()
-        .data
     )
+    existing = getattr(response, "data", None)
     payload = {"quantity": quantity, "updated_by": user_id, "updated_at": _now()}
     if existing:
         supabase.table("inventories").update(payload).eq("id", existing["id"]).execute()
@@ -134,7 +134,6 @@ def create_meal_report(payload: MealReportCreate, current_user: BusinessEditorUs
         supabase.table("meal_reports")
         .insert({**payload.model_dump(mode="json"), "reported_by": current_user.auth_user_id})
         .select(MEAL_SELECT)
-        .single()
         .execute(),
         "Meal report was created but could not be read",
     )
@@ -162,7 +161,6 @@ def create_drink_refill(payload: RestockReportCreate, current_user: BusinessEdit
         supabase.table("restock_reports")
         .insert({**payload.model_dump(mode="json"), "requested_by": current_user.auth_user_id})
         .select(RESTOCK_SELECT)
-        .single()
         .execute(),
         "Restock report was created but could not be read",
     )
@@ -184,7 +182,6 @@ def update_drink_refill_status(report_id: int, payload: RestockStatusUpdate, cur
         .update(updates)
         .eq("id", report_id)
         .select(RESTOCK_SELECT)
-        .single()
         .execute(),
         "Restock report was updated but could not be read",
     )
@@ -221,7 +218,6 @@ def create_inventory_check(payload: InventoryCheckCreate, current_user: Business
         supabase.table("inventory_checks")
         .insert(insert_payload)
         .select(INVENTORY_CHECK_SELECT)
-        .single()
         .execute(),
         "Inventory check was created but could not be read",
     )

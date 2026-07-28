@@ -17,14 +17,14 @@ def _referenced_user_count(role_id: int) -> int:
 
 
 def _ensure_unique_role_code(code: str, exclude_id: int | None = None) -> None:
-    existing = (
+    response = (
         supabase.table("app_roles")
         .select("id")
         .eq("code", code)
         .maybe_single()
         .execute()
-        .data
     )
+    existing = getattr(response, "data", None)
     if existing and existing.get("id") != exclude_id:
         raise conflict("Role code already exists")
 
@@ -53,7 +53,6 @@ def create_role(payload: RoleCreate, current_user: AdminUser) -> dict:
         supabase.table("app_roles")
         .insert(payload.model_dump(mode="json"))
         .select(ROLE_SELECT)
-        .single()
         .execute(),
         "Role was created but could not be read",
     )
@@ -80,14 +79,13 @@ def update_role(role_id: int, payload: RoleUpdate, current_user: AdminUser) -> d
         raise conflict("Basic role code cannot be changed")
 
     if new_code:
-        _ensure_unique_role_code(new_code, exclude_id=role_id_str)
+        _ensure_unique_role_code(new_code, exclude_id=role_id)
 
     after = response_single(
         supabase.table("app_roles")
         .update(updates)
         .eq("id", role_id)
         .select(ROLE_SELECT)
-        .single()
         .execute(),
         "Role was updated but could not be read",
     )

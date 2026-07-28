@@ -37,7 +37,7 @@ async function handleLogin() {
     <main class="login-card-container">
       <section class="login-card">
         <h2>ログイン</h2>
-        <p>登録済みのアカウントでログインしてください。</p>
+        <p>登録済みのメールアドレスとパスワードでログインしてください。</p>
 
         <form class="login-form" @submit.prevent="handleLogin">
           <label>

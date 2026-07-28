@@ -354,8 +354,6 @@ function showLockMessage(){
   </div>
 </template>
 
-
-
 <style scoped>
 .d-table{
   margin-bottom:40px;
