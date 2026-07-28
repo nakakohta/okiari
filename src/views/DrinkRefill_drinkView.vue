@@ -342,11 +342,9 @@ td {
 }
 
 .store-menu {
-
   position: sticky;
   top: 20px;
   z-index: 100;
-
   background: white;
   padding: 25px;
   border-radius: 12px;
