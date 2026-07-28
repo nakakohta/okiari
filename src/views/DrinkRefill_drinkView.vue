@@ -112,11 +112,11 @@ onMounted(load)
         </h2>
 
         <h3>ドリンク補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
 
 
         <h3>消耗品補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
       </section>
 
       <!-- 2-1 -->
@@ -124,10 +124,10 @@ onMounted(load)
         <h2 class="store-title">2-1</h2>
 
         <h3>ドリンク補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
 
         <h3>消耗品補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
       </section>
 
       <!-- 2-2 -->
@@ -135,10 +135,10 @@ onMounted(load)
         <h2 class="store-title">2-2</h2>
 
         <h3>ドリンク補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
 
         <h3>消耗品補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
       </section>
 
       <!-- 2-7 -->
@@ -146,10 +146,10 @@ onMounted(load)
         <h2 class="store-title">2-7</h2>
 
         <h3>ドリンク補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
 
         <h3>消耗品補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
       </section>
 
       <!-- 2-8 -->
@@ -157,10 +157,10 @@ onMounted(load)
         <h2 class="store-title">2-8</h2>
 
         <h3>ドリンク補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
 
         <h3>消耗品補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
       </section>
 
       <!-- 3-1 -->
@@ -168,10 +168,10 @@ onMounted(load)
         <h2 class="store-title">3-1</h2>
 
         <h3>ドリンク補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
 
         <h3>消耗品補充</h3>
-        <DTable title="ドリンク補充" />
+        <DTable/>
       </section>
 
       <!-- 3-5 -->
@@ -179,10 +179,10 @@ onMounted(load)
         <h2 class="store-title">3-5</h2>
 
           <h3>ドリンク補充</h3>
-          <DTable title="ドリンク補充" />
+          <DTable/>
 
           <h3>消耗品補充</h3>
-          <DTable title="ドリンク補充" />
+          <DTable/>
         </section>
 
         <!-- 3-9 -->
@@ -190,10 +190,10 @@ onMounted(load)
           <h2 class="store-title">3-9</h2>
 
           <h3>ドリンク補充</h3>
-          <DTable title="ドリンク補充" />
+          <DTable/>
 
           <h3>消耗品補充</h3>
-          <DTable title="ドリンク補充" />
+          <DTable/>
         </section>
 
         <!-- 3-11 -->
@@ -203,10 +203,10 @@ onMounted(load)
           </h2>
 
           <h3>ドリンク補充</h3>
-          <DTable title="ドリンク補充" />
+          <DTable/>
 
           <h3>消耗品補充</h3>
-          <DTable title="ドリンク補充" />
+          <DTable/>
         </section>
       </div>
       </main>
@@ -342,6 +342,11 @@ td {
 }
 
 .store-menu {
+
+  position: sticky;
+  top: 20px;
+  z-index: 100;
+
   background: white;
   padding: 25px;
   border-radius: 12px;
@@ -364,6 +369,7 @@ td {
 }
 
 .store-section {
+  scroll-margin-top: 210px;
   margin-bottom: 80px;
 }
 
