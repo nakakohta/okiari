@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
+import { useRealtimeRefresh } from '@/composables/useRealtimeRefresh'
 import { mastersService, reportService } from '@/lib/services'
 import { useAuthStore } from '@/stores/auth'
 import type { Product, RestockReport, RestockStatus, Store } from '@/lib/types'
@@ -24,6 +25,9 @@ const note = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const errorMessage = ref('')
+const editableStores = computed(() => stores.value.filter(
+  (store) => store.is_active && auth.canEditStore(store.id),
+))
 
 async function load() {
   loading.value = true
@@ -78,6 +82,16 @@ async function updateStatus(report: RestockReport, status: RestockStatus) {
   }
 }
 
+async function refreshReports() {
+  try {
+    reports.value = await reportService.drinkRefills()
+  } catch {
+    errorMessage.value = 'リアルタイム更新を取得できませんでした'
+  }
+}
+
+const { realtimeState } = useRealtimeRefresh('restock_reports', refreshReports)
+
 onMounted(load)
 </script>
 
@@ -86,6 +100,9 @@ onMounted(load)
     <Sidebar />
     <main class="content">
       <AppHeader title="ポップコーン" description="ドリンク補充依頼を登録し、対応状況を管理します。" />
+      <p class="realtime-state" :class="realtimeState">
+        {{ realtimeState === 'connected' ? '● リアルタイム接続中' : '○ 再接続中' }}
+      </p>
       <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
       <p v-if="loading" class="muted">読み込み中...</p>
 
@@ -94,7 +111,7 @@ onMounted(load)
           場所
           <select v-model.number="storeId" required>
             <option value="" disabled>選択してください</option>
-            <option v-for="store in stores" :key="store.id" :value="store.id">{{ store.name }}</option>
+            <option v-for="store in editableStores" :key="store.id" :value="store.id">{{ store.name }}</option>
           </select>
         </label>
         <label>
@@ -282,5 +299,16 @@ td {
   background: #fee2e2;
   padding: 10px 12px;
   border-radius: 8px;
+}
+
+.realtime-state {
+  color: #b45309;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.realtime-state.connected {
+  color: #15803d;
 }
 </style>

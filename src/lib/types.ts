@@ -24,7 +24,13 @@ export interface AppUser {
 export interface MeResponse {
   user: AppUser
   role: Role
-  store_assignments: unknown[]
+  store_assignments: StoreAssignment[]
+}
+
+export interface StoreAssignment {
+  store_id: number
+  can_view: boolean
+  can_edit: boolean
 }
 
 export interface Store {
@@ -32,6 +38,8 @@ export interface Store {
   name: string
   store_type: string
   is_active: boolean
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface Product {
@@ -40,6 +48,8 @@ export interface Product {
   category: ProductCategory | string
   unit: string
   is_active: boolean
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 export interface MealReport {
@@ -51,6 +61,7 @@ export interface MealReport {
   reported_by?: string | null
   note?: string | null
   created_at?: string | null
+  updated_at?: string | null
   store?: Store | null
   product?: Product | null
 }
@@ -66,6 +77,8 @@ export interface RestockReport {
   requested_by?: string | null
   completed_by?: string | null
   note?: string | null
+  created_at?: string | null
+  updated_at?: string | null
   store?: Store | null
   product?: Product | null
 }

@@ -55,7 +55,9 @@ function deleteRow(index: number) {
 }
 
 function addContainer(rowIndex: number) {
-  items.value[rowIndex].containers.push({
+  const row = items.value[rowIndex]
+  if (!row) return
+  row.containers.push({
     id: nextContainerId.value++,
     name: "",
     type: "input",
@@ -67,9 +69,11 @@ function deleteContainer(rowIndex: number, containerIndex: number) {
   const ok = confirm("この項目を削除しますか？")
   if (!ok) return
 
-  items.value[rowIndex].containers.splice(containerIndex, 1)
+  const row = items.value[rowIndex]
+  if (!row) return
+  row.containers.splice(containerIndex, 1)
 
-  if (items.value[rowIndex].containers.length === 0) {
+  if (row.containers.length === 0) {
     addContainer(rowIndex)
   }
 }
@@ -79,7 +83,8 @@ function selectContainerType(
   containerIndex: number,
   type: ContainerType
 ) {
-  const container = items.value[rowIndex].containers[containerIndex]
+  const container = items.value[rowIndex]?.containers[containerIndex]
+  if (!container) return
   container.type = type
 
   if (type === "input") {
@@ -163,6 +168,7 @@ function drop(index: number) {
   if (draggedRowIndex.value === null || draggedRowIndex.value === index) return
 
   const moved = items.value.splice(draggedRowIndex.value, 1)[0]
+  if (!moved) return
   items.value.splice(index, 0, moved)
   draggedRowIndex.value = null
   closeTypeMenu()

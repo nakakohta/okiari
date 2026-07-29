@@ -1,726 +1,325 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { computed, onUnmounted, reactive, watch } from 'vue'
+import { reportService } from '@/lib/services'
+import type { MealReport, Product, Store } from '@/lib/types'
 
-// 列ロック状態
-const columnLock = ref({
-  status:false,
-  name:false,
-  previous:false,
-  add:false,
-  memo:false
-})
+type CellSaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 
-// ロック切替
-function toggleLock(column:string){
-  columnLock.value[column] =
-    !columnLock.value[column]
-}
+const props = withDefaults(
+  defineProps<{
+    title?: string
+    reportDate: string
+    stores: Store[]
+    products: Product[]
+    reports: MealReport[]
+    canEditStore: (storeId: number) => boolean
+    readonly?: boolean
+  }>(),
+  {
+    title: '',
+    readonly: false,
+  },
+)
 
-// ロック警告
-function checkLock(column:string){
-  if(columnLock.value[column]){
-    showLockMessage()
-  }
-}
-
-defineProps<{
-  title: string
+const emit = defineEmits<{
+  saved: [report: MealReport]
+  error: [message: string]
 }>()
 
-interface RestockItem {
-  boothType: string
-  booth: string
-  customBooth: string
+const cellValues = reactive<Record<string, string>>({})
+const saveStates = reactive<Record<string, CellSaveState>>({})
+const dirtyKeys = new Set<string>()
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const editVersions = new Map<string, number>()
+const pendingCells = new Map<
+  string,
+  { reportDate: string; storeId: number; productId: number }
+>()
 
-  name: string
-  previous: number
-  add: number
-  memo: string
-  status: string
-
-  extra: string[]
-}
-
-const items = ref<RestockItem[]>([
-  {
-  boothType: "",
-  booth: "",
-  customBooth: "",
-
-  name: "",
-  previous: 0,
-  add: 0,
-  memo: "",
-  status: "ブース",
-
-  extra:[""]
+const reportMap = computed(() => {
+  const map = new Map<string, MealReport>()
+  for (const report of props.reports) {
+    map.set(`${report.store_id}:${report.product_id}`, report)
   }
-])
+  return map
+})
 
-const columns = ref([
-  { title: "商品名1" }
-])
-
-function addRow() {
-  items.value.push({
-    boothType:"",
-    booth:"",
-    customBooth:"",
-
-    name:"",
-    previous:0,
-    add:0,
-    memo:"",
-    status:"ブース",
-
-    extra:new Array(columns.value.length).fill("")
-  })
+function cellKey(reportDate: string, storeId: number, productId: number) {
+  return `${reportDate}:${storeId}:${productId}`
 }
 
-function addColumn() {
-  columns.value.push({
-    title: `商品名${columns.value.length + 1}`
-  })
-
-  items.value.forEach(item => {
-    item.extra.push("")
-  })
+function reportKey(storeId: number, productId: number) {
+  return `${storeId}:${productId}`
 }
 
-function deleteColumn(index: number) {
-
-  const result = confirm("この列を削除しますか？")
-  if (!result) return
-
-  // 見出し削除
-  columns.value.splice(index, 1)
-
-  // 全行の同じ列も削除
-  items.value.forEach(item => {
-    item.extra.splice(index, 1)
-  })
+function syncFromReports() {
+  for (const store of props.stores) {
+    for (const product of props.products) {
+      const key = cellKey(props.reportDate, store.id, product.id)
+      if (dirtyKeys.has(key)) continue
+      const report = reportMap.value.get(reportKey(store.id, product.id))
+      cellValues[key] = report ? String(report.quantity) : ''
+      if (!saveStates[key] || saveStates[key] === 'saved') saveStates[key] = 'idle'
+    }
+  }
 }
 
-function deleteRow(index: number) {
-  const result = confirm("この行を削除しますか？")
-  if (!result) return
-  items.value.splice(index, 1)
-}
+watch(
+  () => [props.reportDate, props.stores, props.products, props.reports],
+  syncFromReports,
+  { immediate: true, deep: true },
+)
 
-function clearData() {
-  const result = confirm(
-    "書き込まれている食数を一斉クリアしますか？"
+function scheduleSave(storeId: number, productId: number, event: Event) {
+  const input = event.target as HTMLInputElement
+  const reportDate = props.reportDate
+  const key = cellKey(reportDate, storeId, productId)
+  cellValues[key] = input.value
+  dirtyKeys.add(key)
+  editVersions.set(key, (editVersions.get(key) ?? 0) + 1)
+  saveStates[key] = 'pending'
+  pendingCells.set(key, { reportDate, storeId, productId })
+
+  const previousTimer = saveTimers.get(key)
+  if (previousTimer) clearTimeout(previousTimer)
+  saveTimers.set(
+    key,
+    setTimeout(() => {
+      saveTimers.delete(key)
+      void saveCell(key)
+    }, 450),
   )
-  if (!result) return
-
-  items.value.forEach(item => {
-  // 追加した列の内容をすべて空白にする
-  item.extra = item.extra.map(() => "")
-  })
 }
 
-const lockMessage = ref(false)
+async function saveCell(key: string) {
+  const pending = pendingCells.get(key)
+  if (!pending || props.readonly || !props.canEditStore(pending.storeId)) return
+  const rawValue = cellValues[key] ?? ''
+  const savingVersion = editVersions.get(key) ?? 0
+  const quantity = rawValue === '' ? 0 : Number(rawValue)
+  if (!Number.isInteger(quantity) || quantity < 0) {
+    saveStates[key] = 'error'
+    emit('error', '食数には0以上の整数を入力してください')
+    return
+  }
 
-function showLockMessage(){
-  lockMessage.value=true
-  setTimeout(()=>{
-    lockMessage.value=false
-  },2000)
-}
-
-const boothPopup = ref<number | null>(null)
-
-function toggleBooth(index:number){
-  boothPopup.value =
-    boothPopup.value===index ? null : index
-}
-
-function selectBooth(item: RestockItem, booth: string) {
-  item.booth = booth
-
-  if (booth !== "その他") {
-    boothPopup.value = null
+  saveStates[key] = 'saving'
+  try {
+    const saved = await reportService.upsertMealReport({
+      report_date: pending.reportDate,
+      store_id: pending.storeId,
+      product_id: pending.productId,
+      quantity,
+      note: null,
+    })
+    if ((editVersions.get(key) ?? 0) === savingVersion) {
+      dirtyKeys.delete(key)
+      pendingCells.delete(key)
+      cellValues[key] = String(saved.quantity)
+      saveStates[key] = 'saved'
+    } else {
+      saveStates[key] = 'pending'
+    }
+    emit('saved', saved)
+  } catch {
+    if ((editVersions.get(key) ?? 0) === savingVersion) {
+      saveStates[key] = 'error'
+      emit('error', '食数を自動保存できませんでした。入力内容は画面に残っています。')
+    }
   }
 }
 
-function confirmCustomBooth(item: RestockItem) {
-  // 未入力なら何もしない
-  if (item.customBooth.trim() === "") return
-
-  // 表示用に「その他」のままにしておく
-  item.booth = "その他"
-
-  // ポップアップを閉じる
-  boothPopup.value = null
+function stateLabel(key: string) {
+  const state = saveStates[key] ?? 'idle'
+  if (state === 'pending') return '保存待ち'
+  if (state === 'saving') return '保存中…'
+  if (state === 'saved') return '保存済み'
+  if (state === 'error') return '保存失敗'
+  return ''
 }
 
-const boothGroups = {
-  first:[
-    "CSL",
-    "VIP(ブルー)",
-    "VIP(レッド)",
-    "その他"
-  ],
-
-  second:[
-    "2-1",
-    "2-2",
-    "2-3",
-    "2-4",
-    "2-5",
-    "2-6",
-    "2-7",
-    "2-8"
-  ],
-
-  third:[
-    "3-1",
-    "3-3",
-    "3-5",
-    "3-7",
-    "3-9",
-    "3-11(スイートラウンジ)"
-  ]
-}
-
+onUnmounted(() => {
+  for (const [key, timer] of saveTimers) {
+    clearTimeout(timer)
+    void saveCell(key)
+  }
+  saveTimers.clear()
+})
 </script>
 
 <template>
   <div class="md-table">
-
-    <div
-      v-if="lockMessage"
-      class="lock-warning"
-      >
-      編集したい場合はロックを解除してください
+    <div v-if="title" class="table-heading">
+      <h3>{{ title }}</h3>
+      <span>入力内容は自動保存されます</span>
     </div>
 
-    <div class="header">
-          <h3>{{ title }}</h3>
-
-      <div class="header-buttons">
-
-  <button
-    class="clear-btn"
-    @click="clearData"
-  >
-    クリア
-  </button>
-
-  </div>
-</div>
-
-    <div class="toolbar">
-      <button @click="addRow">
-        ＋行追加
-      </button>
-
-      <button @click="addColumn">
-        ＋列追加
-      </button>
-    </div>
-
-<div class="table-wrapper">
     <div class="table-container">
       <table>
         <thead>
           <tr>
-            <th>
-              売店名
-              <button
-                class="lock-icon"
-                @click="toggleLock('status')"
-              >
-                {{ columnLock.status ? "🔒" : "🔓" }}
-              </button>
+            <th class="store-column">売店名</th>
+            <th v-for="product in products" :key="product.id">
+              {{ product.name }}
+              <small>{{ product.unit }}</small>
             </th>
-           
-            <th
-              v-for="(column,index) in columns"
-              :key="index"
-              class="dynamic-column"
-            >
-              <div class="column-header">
-
-                <input
-                  v-model="column.title"
-                  class="column-title"
-                />
-
-                <button
-                  class="delete-column-btn"
-                  @click="deleteColumn(index)"
-                >
-                  ×
-                </button>
-
-  </div>
-</th>
           </tr>
         </thead>
-
         <tbody>
-          <tr
-            v-for="(item,index) in items"
-            :key="index"
-          >
-
-<td class="booth-cell">
-
-  <button
-    class="booth-btn"
-    @click="
-      columnLock.status
-        ? checkLock('status')
-        : toggleBooth(index)
-    "
-  >
-    ブース
-  </button>
-
-  <span class="selected-booth">
-    {{
-      item.booth==="その他"
-      ? item.customBooth
-      : item.booth
-    }}
-  </span>
-
-  <div
-    v-if="boothPopup===index"
-    class="booth-popup"
-  >
-
-    <div class="popup-title">
-      階数
-    </div>
-
-    <div class="floor-buttons">
-      <button
-        :class="{ active:item.boothType==='first' }"
-        @click="item.boothType='first'"
-      >
-        1階
-      </button>
-
-      <button
-        :class="{ active:item.boothType==='second' }"
-        @click="item.boothType='second'"
-      >
-        2階
-      </button>
-
-      <button
-        :class="{ active:item.boothType==='third' }"
-        @click="item.boothType='third'"
-      >
-        3階
-      </button>
-
-</div>
-
-    <hr>
-
-    <template
-      v-if="item.boothType==='first'"
-    >
-      <div class="booth-list">
-        <button
-          v-for="b in boothGroups.first"
-          :key="b"
-          @click="selectBooth(item, b)"
-        >
-          {{ b }}
-        </button>
-      </div>
-    </template>
-
-    <template
-      v-if="item.boothType==='second'"
-    >
-      <div class="booth-list">
-        <button
-          v-for="b in boothGroups.second"
-          :key="b"
-          @click="selectBooth(item, b)"
-        >
-          {{ b }}
-        </button>
-      </div>
-    </template>
-
-    <template
-      v-if="item.boothType==='third'"
-    >
-      <div class="booth-list">
-        <button
-          v-for="b in boothGroups.third"
-          :key="b"
-          @click="selectBooth(item, b)"
-        >
-          {{ b }}
-        </button>
-      </div>
-    </template>
-
-   <div
-  v-if="item.booth === 'その他'"
-  class="custom-booth"
->
-  <input
-    v-model="item.customBooth"
-    :readonly="columnLock.status"
-    @click="columnLock.status && checkLock('status')"
-    placeholder="売店名を入力"
-  />
-
-  <button
-    class="ok-btn"
-    @click="confirmCustomBooth(item)"
-  >
-    OK
-  </button>
-</div>
-
-  </div>
-
-  <button
-    class="remove-btn"
-    @click="
-      columnLock.status
-        ? checkLock('status')
-        : deleteRow(index)
-    "
-  >
-    ×
-  </button>
-
-</td>
-
-<td
-  v-for="(cell,colIndex) in item.extra"
-  :key="colIndex"
->
-  <input
-    v-model="item.extra[colIndex]"
-  />
-</td>
+          <tr v-for="store in stores" :key="store.id">
+            <th class="store-name">{{ store.name }}</th>
+            <td v-for="product in products" :key="product.id">
+              <div class="cell-editor">
+                <input
+                  :value="cellValues[cellKey(reportDate, store.id, product.id)] ?? ''"
+                  type="number"
+                  min="0"
+                  step="1"
+                  inputmode="numeric"
+                  :disabled="readonly || !canEditStore(store.id)"
+                  aria-label="食数"
+                  @input="scheduleSave(store.id, product.id, $event)"
+                />
+                <span
+                  class="save-state"
+                  :class="saveStates[cellKey(reportDate, store.id, product.id)]"
+                >
+                  {{ stateLabel(cellKey(reportDate, store.id, product.id)) }}
+                </span>
+              </div>
+            </td>
+          </tr>
+          <tr v-if="stores.length === 0">
+            <td :colspan="products.length + 1" class="empty">表示できる売店がありません</td>
           </tr>
         </tbody>
       </table>
-      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.d-table{
-  margin-bottom:40px;
+.md-table {
+  min-width: 0;
 }
 
-.header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-bottom:20px;
+.table-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
 }
 
-.header-buttons{
-  display:flex;
-  gap:10px;
+.table-heading h3 {
+  margin: 0;
 }
 
-.clear-btn{
-  background:#6b7280;
-  color:white;
-  border:none;
-  padding:10px 25px;
-  border-radius:6px;
-  cursor:pointer;
+.table-heading span {
+  color: #64748b;
+  font-size: 12px;
 }
 
-.clear-btn:hover{
-  background:#4b5563;
+.table-container {
+  overflow-x: auto;
+  border: 1px solid #dbe4ee;
+  border-radius: 12px;
 }
 
-.toolbar{
-  margin-bottom:15px;
-}
-
-.toolbar button{
-  padding:8px 15px;
-  cursor:pointer;
-}
-
-.table-container{
-  overflow-x:auto;
-  overflow-y:visible;
-  width:100%;
-}
-
-table{
-  width:max-content;
-  min-width:100%;
-  border-collapse:collapse;
-  background:white;
+table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  background: #fff;
 }
 
 th,
-td{
-  border:1px solid #ddd;
-  padding:10px;
-  white-space:nowrap;
+td {
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  padding: 10px;
+  text-align: center;
 }
 
-th{
-  background:#f3f5f8;
-  text-align:center;
+tr:last-child th,
+tr:last-child td {
+  border-bottom: 0;
 }
 
-input{
-  border:none;
-  outline:none;
-  background:transparent;
-  min-width:100px;
-  width:100%;
-  padding:4px;
+th:last-child,
+td:last-child {
+  border-right: 0;
 }
 
-.remove-btn{
-  background:none;
-  border:none;
-  color:#ef4444;
-  font-size:22px;
-  cursor:pointer;
+thead th {
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 13px;
 }
 
-.lock-icon{
-  margin-left:6px;
-  width:22px;
-  height:22px;
-  border-radius:50%;
-  border:none;
-  background:white;
-  box-shadow:
-    0 1px 4px rgba(0,0,0,.25);
-  font-size:13px;
-  cursor:pointer;
-  display:inline-flex;
-  justify-content:center;
-  align-items:center;
-  vertical-align:middle;
+thead small {
+  display: block;
+  margin-top: 3px;
+  color: #64748b;
+  font-weight: 500;
 }
 
-/* ロック時入力不可 */
-input[readonly]{
-  cursor:not-allowed;
-  background:#f3f4f6;
+.store-column,
+.store-name {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 150px;
 }
 
-/* 警告 */
-.lock-warning{
-  position:sticky;
-  top:0;
-  z-index:2000;
-  background:#fee2e2;
-  color:#dc2626;
-  border:1px solid #dc2626;
-  padding:12px;
-  text-align:center;
-  font-weight:bold;
-  margin-bottom:10px;
-  border-radius:6px;
+.store-name {
+  background: #f8fafc;
+  text-align: left;
 }
 
-.booth-cell{
-  position:relative;
-  min-width:220px;
+.cell-editor {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  min-width: 110px;
 }
 
-.booth-btn{
-  background:#2563eb;
-  color:white;
-  border:none;
-  border-radius:6px;
-  padding:8px 14px;
-  font-weight:bold;
-  cursor:pointer;
+input {
+  width: 88px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: right;
+  font: inherit;
 }
 
-.selected-booth{
-  margin-left:10px;
-  font-weight:bold;
-  display:inline-block;
-  max-width:130px;
-  word-break:break-word;
+input:focus {
+  border-color: #2563eb;
+  outline: 3px solid rgba(37, 99, 235, 0.12);
 }
 
-.booth-popup{
-  position:absolute;
-  top:42px;
-  left:0;
-
-  width:320px;
-
-  background:#fff;
-  border:1px solid #d1d5db;
-  border-radius:12px;
-
-  padding:16px;
-
-  box-shadow:0 10px 25px rgba(0,0,0,.18);
-
-  display:flex;
-  flex-direction:column;
-  gap:14px;
-
-  z-index:99999;
+input:disabled {
+  background: #f1f5f9;
+  color: #64748b;
 }
 
-.popup-title{
-  font-size:15px;
-  font-weight:bold;
-  margin-bottom:4px;
+.save-state {
+  min-height: 16px;
+  color: #64748b;
+  font-size: 10px;
 }
 
-.booth-popup button.active{
-  background:#2563eb;
-  color:white;
-  font-weight:bold;
+.save-state.saved {
+  color: #15803d;
 }
 
-.custom-booth{
-  width:100%;
-  display:flex;
-  gap:8px;
-  margin-top:10px;
+.save-state.error {
+  color: #dc2626;
+  font-weight: 700;
 }
 
-.custom-booth input{
-  flex:1;
+.empty {
+  color: #64748b;
+  text-align: center;
 }
-
-.ok-btn{
-  padding:6px 14px;
-  border:none;
-  border-radius:6px;
-  background:#2563eb;
-  color:white;
-  cursor:pointer;
-}
-
-.ok-btn:hover{
-  background:#1d4ed8;
-}
-
-.column-title{
-  width:100%;
-  text-align:center;
-  border:none;
-  background:transparent;
-  font-weight:bold;
-  font-size:15px;
-}
-
-.floor-buttons{
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:8px;
-}
-
-.booth-list{
-  display:grid;
-  grid-template-columns:repeat(2,1fr);
-  gap:8px;
-}
-
-.booth-popup button{
-  padding:8px 10px;
-  border:none;
-  border-radius:8px;
-  background:#f3f4f6;
-  cursor:pointer;
-  transition:.2s;
-}
-
-.booth-popup button:hover{
-  background:#dbeafe;
-}
-
-.table-section{
-  position: relative;
-  background:#fff;
-  border-radius:16px;
-  padding:28px;
-  margin-bottom:40px;
-  border:1px solid #e5e7eb;
-  box-shadow:
-    0 4px 12px rgba(0,0,0,.05);
-  overflow: visible;
-}
-
-.table-section h2{
-  display:inline-block;
-  margin:0 0 20px;
-  padding:8px 18px;
-  background:#2563eb;
-  color:white;
-  border-radius:999px;
-  font-size:18px;
-  font-weight:700;
-}
-
-.booth-popup{
-  position:absolute;
-  top:48px;
-  left:0;
-  width:340px;
-  background:white;
-  border-radius:14px;
-  border:1px solid #d1d5db;
-  box-shadow:
-      0 18px 50px rgba(0,0,0,.25);
-  padding:18px;
-  z-index:99999;
-}
-
-.booth-popup::before{
-    content:"";
-    position:absolute;
-    top:-10px;
-    left:25px;
-    border-left:10px solid transparent;
-    border-right:10px solid transparent;
-    border-bottom:10px solid white;
-}
-
-.dynamic-column{
-  min-width:150px;
-}
-
-.column-header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:6px;
-}
-
-.delete-column-btn{
-  width:22px;
-  height:22px;
-
-  border:none;
-  background:none;
-
-  color:#ef4444;
-  font-size:18px;
-
-  cursor:pointer;
-  border-radius:50%;
-}
-
-.delete-column-btn:hover{
-  background:#fee2e2;
-}
-
 </style>

@@ -66,8 +66,10 @@ export const roleService = {
 }
 
 export const reportService = {
-  async mealReports() {
-    const { data } = await api.get<MealReport[]>('/meal-reports')
+  async mealReports(reportDate?: string) {
+    const { data } = await api.get<MealReport[]>('/meal-reports', {
+      params: reportDate ? { report_date: reportDate } : undefined,
+    })
     return data
   },
   async createMealReport(payload: {
@@ -78,6 +80,20 @@ export const reportService = {
     note?: string | null
   }) {
     const { data } = await api.post<MealReport>('/meal-reports', payload)
+    return data
+  },
+  async upsertMealReport(payload: {
+    report_date: string
+    store_id: number
+    product_id: number
+    quantity: number
+    note?: string | null
+  }) {
+    const { data } = await api.put<MealReport>('/meal-reports/cell', payload)
+    return data
+  },
+  async updateMealReport(reportId: number, payload: { quantity?: number; note?: string | null }) {
+    const { data } = await api.patch<MealReport>(`/meal-reports/${reportId}`, payload)
     return data
   },
   async drinkRefills() {
@@ -97,6 +113,13 @@ export const reportService = {
     const { data } = await api.patch<RestockReport>(`/drink-refills/${reportId}/status`, { status })
     return data
   },
+  async updateDrinkRefill(
+    reportId: number,
+    payload: { quantity?: number; status?: RestockStatus; note?: string | null },
+  ) {
+    const { data } = await api.patch<RestockReport>(`/drink-refills/${reportId}`, payload)
+    return data
+  },
   async inventoryChecks() {
     const { data } = await api.get<InventoryCheck[]>('/inventory-checks')
     return data
@@ -111,6 +134,18 @@ export const reportService = {
     note?: string | null
   }) {
     const { data } = await api.post<InventoryCheck>('/inventory-checks', payload)
+    return data
+  },
+  async updateInventoryCheck(
+    reportId: number,
+    payload: {
+      expected_quantity?: number
+      actual_quantity?: number
+      is_confirmed?: boolean
+      note?: string | null
+    },
+  ) {
+    const { data } = await api.patch<InventoryCheck>(`/inventory-checks/${reportId}`, payload)
     return data
   },
 }

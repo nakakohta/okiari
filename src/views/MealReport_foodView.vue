@@ -1,24 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
-import { mastersService, reportService } from '@/lib/services'
-import { useAuthStore } from '@/stores/auth'
-import type { MealReport, Product, Store } from '@/lib/types'
 import MFTable from '@/components/RestockTable/MFTable.vue'
-
-const auth = useAuthStore()
-const stores = ref<Store[]>([])
-const products = ref<Product[]>([])
-const reports = ref<MealReport[]>([])
-const reportDate = ref(new Date().toISOString().slice(0, 10))
-const storeId = ref<number | ''>('')
-const productId = ref<number | ''>('')
-const quantity = ref(0)
-const note = ref('')
-const loading = ref(false)
-const saving = ref(false)
-const errorMessage = ref('')
 
 type StoreSection = {
   id: number
@@ -68,25 +52,6 @@ function removeStoreSection(id: number) {
   )
 }
 
-async function load() {
-  loading.value = true
-  errorMessage.value = ''
-  try {
-    const [storeData, productData, reportData] = await Promise.all([
-      mastersService.stores(),
-      mastersService.products('meal'),
-      reportService.mealReports(),
-    ])
-    stores.value = storeData
-    products.value = productData
-    reports.value = reportData
-  } catch {
-    errorMessage.value = '食数報告情報を取得できませんでした'
-  } finally {
-    loading.value = false
-  }
-}
-
 const draggedSectionIndex = ref<number | null>(null)
 
 function dragStartSection(index: number) {
@@ -110,6 +75,7 @@ function dropSection(index: number) {
     1
   )[0]
 
+  if (!moved) return
   tableSections.value.splice(index, 0, moved)
 
   draggedSectionIndex.value = null
@@ -123,9 +89,6 @@ function dropSection(index: number) {
     <Sidebar />
     <main class="content">
       <AppHeader title="食数報告(フード)" description="場所・商品ごとの食数を登録します。" />
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="loading" class="muted">読み込み中...</p>
-
 <section
   v-for="(section, index) in tableSections"
   :key="section.id"

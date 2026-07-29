@@ -1,592 +1,489 @@
 <script setup lang="ts">
-import { ref, computed } from "vue"
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { reportService } from '@/lib/services'
+import type { Product, RestockReport, RestockStatus, Store } from '@/lib/types'
 
-// 列ロック状態
-const columnLock = ref({
-  status:false,
-  name:false,
-  previous:false,
-  add:false,
-  memo:false
-})
+type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
+type RestockPatch = { quantity?: number; status?: RestockStatus; note?: string | null }
 
-// ロック切替
-function toggleLock(column:string){
-  columnLock.value[column] =
-    !columnLock.value[column]
-}
+const props = withDefaults(
+  defineProps<{
+    title?: string
+    store: Store
+    products: Product[]
+    reports: RestockReport[]
+    readonly?: boolean
+  }>(),
+  {
+    title: 'ドリンク補充',
+    readonly: false,
+  },
+)
 
-// ロック警告
-function checkLock(column:string){
-  if(columnLock.value[column]){
-    showLockMessage()
-  }
-}
-
-  function showModeMessage(message:string){
-  modeMessageText.value = message
-  modeMessage.value = true
-  setTimeout(() => {
-    modeMessage.value = false
-  }, 3000)
-}
-
-defineProps<{
-  title: string
+const emit = defineEmits<{
+  saved: [report: RestockReport]
+  error: [message: string]
 }>()
 
-interface RestockItem {
-  name: string
-  previous: number
-  add: number
-  memo: string
-  status: string
+const statusLabels: Record<RestockStatus, string> = {
+  requested: '未補充',
+  working: '対応中',
+  completed: '完了',
+  cancelled: '在庫なし・取消',
 }
 
 const prepareMode = ref(false)
+const rowValues = reactive<
+  Record<number, { quantity: string; note: string; status: RestockStatus }>
+>({})
+const rowStates = reactive<Record<number, SaveState>>({})
+const dirtyRows = new Set<number>()
+const updateTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const pendingUpdates = new Map<number, RestockPatch>()
+const updateVersions = new Map<number, number>()
 
-function togglePrepareMode() {
-  prepareMode.value = !prepareMode.value
-  if (prepareMode.value) {
-    showModeMessage(
-      "売店準備モードです！！ 補充状況が「未補充」「在庫無い為未補充」のみを表示します！"
-    )
-  } else {
-    showModeMessage(
-      "興行日モードになりました！！ 在庫確認頑張ってください！！ (◝ ⌄ ◜)"
-    )
-  }
-}
+const draftProductId = ref<number | ''>('')
+const draftQuantity = ref('')
+const draftNote = ref('')
+const draftState = ref<SaveState>('idle')
+let draftTimer: ReturnType<typeof setTimeout> | null = null
 
-const items = ref<RestockItem[]>([
-  {
-    name: "",
-    previous: 0,
-    add: 0,
-    memo: "",
-    status: "未補充"
-  }
-])
-
-const filteredItems = computed(() => {
-  if (!prepareMode.value) {
-    return items.value
-  }
-
-  return items.value.filter(
-    item =>
-      item.status === "未補充" ||
-      item.status === "在庫無い為未補充"
-  )
+const filteredReports = computed(() => {
+  if (!prepareMode.value) return props.reports
+  return props.reports.filter((report) => {
+    const status = rowValues[report.id]?.status ?? report.status
+    return status === 'requested' || status === 'working'
+  })
 })
 
-function addRow() {
-  items.value.push({
-    name: "",
-    previous: 0,
-    add: 0,
-    memo: "",
-    status: "未補充"
-  })
-}
+watch(
+  () => props.reports,
+  (reports) => {
+    for (const report of reports) {
+      if (dirtyRows.has(report.id)) continue
+      rowValues[report.id] = {
+        quantity: String(report.quantity),
+        note: report.note ?? '',
+        status: report.status,
+      }
+      if (!rowStates[report.id] || rowStates[report.id] === 'saved') rowStates[report.id] = 'idle'
+    }
+  },
+  { immediate: true, deep: true },
+)
 
-function deleteRow(index: number) {
-  const result = confirm("この行を削除しますか？")
-  if (!result) return
-  items.value.splice(index, 1)
-}
+function queueUpdate(report: RestockReport, patch: RestockPatch, immediate = false) {
+  if (props.readonly) return
+  dirtyRows.add(report.id)
+  updateVersions.set(report.id, (updateVersions.get(report.id) ?? 0) + 1)
+  pendingUpdates.set(report.id, { ...pendingUpdates.get(report.id), ...patch })
+  rowStates[report.id] = immediate ? 'saving' : 'pending'
 
-const showModal = ref(false)
-const selectedItem = ref<RestockItem | null>(null)
-
-function openStatusModal(item: RestockItem) {
-  selectedItem.value = item
-  showModal.value = true
-}
-
-function setStatus(status: string) {
-  if (selectedItem.value) {
-    selectedItem.value.status = status
+  const previousTimer = updateTimers.get(report.id)
+  if (previousTimer) clearTimeout(previousTimer)
+  if (immediate) {
+    updateTimers.delete(report.id)
+    void saveUpdate(report.id)
+    return
   }
-  showModal.value = false
-  selectedItem.value = null
-}
-
-function clearData() {
-  const result = confirm(
-    "売店準備で補充が全て終わったら押すボタンです。補充状況・取ってくる数・備考をクリアしますか？"
+  updateTimers.set(
+    report.id,
+    setTimeout(() => {
+      updateTimers.delete(report.id)
+      void saveUpdate(report.id)
+    }, 450),
   )
-  if (!result) return
-  items.value.forEach(item => {
-    item.status = "未補充"
-    item.add = 0
-    item.memo = ""
-  })
-prepareMode.value = false
 }
 
-const modeMessage = ref(false)
-const modeMessageText = ref("")
-const lockMessage = ref(false)
-
-function showLockMessage(){
-  lockMessage.value=true
-  setTimeout(()=>{
-    lockMessage.value=false
-  },2000)
+function updateQuantity(report: RestockReport, event: Event) {
+  const value = (event.target as HTMLInputElement).value
+  const row = rowValues[report.id]
+  if (!row) return
+  row.quantity = value
+  const quantity = Number(value)
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    rowStates[report.id] = 'error'
+    return
+  }
+  queueUpdate(report, { quantity })
 }
+
+function updateNote(report: RestockReport, event: Event) {
+  const note = (event.target as HTMLInputElement).value
+  const row = rowValues[report.id]
+  if (!row) return
+  row.note = note
+  if ((event as InputEvent).isComposing) return
+  queueUpdate(report, { note: note || null })
+}
+
+function updateStatus(report: RestockReport, event: Event) {
+  const status = (event.target as HTMLSelectElement).value as RestockStatus
+  const row = rowValues[report.id]
+  if (!row) return
+  row.status = status
+  queueUpdate(report, { status }, true)
+}
+
+async function saveUpdate(reportId: number) {
+  const patch = pendingUpdates.get(reportId)
+  if (!patch || props.readonly) return
+  const savingVersion = updateVersions.get(reportId) ?? 0
+  pendingUpdates.delete(reportId)
+  rowStates[reportId] = 'saving'
+  try {
+    const saved = await reportService.updateDrinkRefill(reportId, patch)
+    if ((updateVersions.get(reportId) ?? 0) === savingVersion && !pendingUpdates.has(reportId)) {
+      dirtyRows.delete(reportId)
+      rowValues[reportId] = {
+        quantity: String(saved.quantity),
+        note: saved.note ?? '',
+        status: saved.status,
+      }
+      rowStates[reportId] = 'saved'
+    } else {
+      rowStates[reportId] = 'pending'
+    }
+    emit('saved', saved)
+  } catch {
+    pendingUpdates.set(reportId, { ...patch, ...pendingUpdates.get(reportId) })
+    if ((updateVersions.get(reportId) ?? 0) === savingVersion) {
+      rowStates[reportId] = 'error'
+      emit('error', '補充依頼を自動保存できませんでした。入力内容は画面に残っています。')
+    }
+  }
+}
+
+function scheduleDraftSave(event?: Event) {
+  if (props.readonly) return
+  if (event && (event as InputEvent).isComposing) return
+  if (draftTimer) clearTimeout(draftTimer)
+  if (draftProductId.value === '' || draftQuantity.value === '') {
+    draftState.value = 'idle'
+    return
+  }
+  draftState.value = 'pending'
+  draftTimer = setTimeout(() => {
+    draftTimer = null
+    void saveDraft()
+  }, 650)
+}
+
+async function saveDraft() {
+  if (draftProductId.value === '' || props.readonly) return
+  const quantity = Number(draftQuantity.value)
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    draftState.value = 'error'
+    emit('error', '補充数には1以上の整数を入力してください')
+    return
+  }
+
+  draftState.value = 'saving'
+  try {
+    const saved = await reportService.createDrinkRefill({
+      store_id: props.store.id,
+      product_id: Number(draftProductId.value),
+      quantity,
+      note: draftNote.value || null,
+    })
+    draftProductId.value = ''
+    draftQuantity.value = ''
+    draftNote.value = ''
+    draftState.value = 'saved'
+    emit('saved', saved)
+  } catch {
+    draftState.value = 'error'
+    emit('error', '新しい補充依頼を自動保存できませんでした')
+  }
+}
+
+function stateLabel(state: SaveState | undefined) {
+  if (state === 'pending') return '保存待ち'
+  if (state === 'saving') return '保存中…'
+  if (state === 'saved') return '保存済み'
+  if (state === 'error') return '保存失敗'
+  return ''
+}
+
+onUnmounted(() => {
+  if (draftTimer) {
+    clearTimeout(draftTimer)
+    void saveDraft()
+  }
+  for (const [reportId, timer] of updateTimers) {
+    clearTimeout(timer)
+    void saveUpdate(reportId)
+  }
+  updateTimers.clear()
+})
 </script>
 
 <template>
   <div class="d-table">
-
-    <div
-      v-if="lockMessage"
-      class="lock-warning"
-      >
-      編集したい場合はロックを解除してください
-    </div>
-
-    <div
-      v-if="modeMessage"
-      class="mode-popup"
-    >
-      {{ modeMessageText }}
-    </div>
-
     <div class="header">
-          <h3>{{ title }}</h3>
-
-      <div class="header-buttons">
-
-  <button
-    class="prepare-btn"
-    :class="{ active: prepareMode }"
-    @click="togglePrepareMode"
-  >
-    {{ prepareMode ? "売店準備" : "興行日"}}
-  </button>
-
-  <button
-    class="clear-btn"
-    @click="clearData"
-  >
-    クリア
-  </button>
-
-</div>
-    </div>
-
-    <div class="toolbar">
-      <button @click="addRow">
-        ＋行追加
+      <div>
+        <h3>{{ title }}</h3>
+        <p>商品と補充数を入力すると自動保存されます</p>
+      </div>
+      <button class="prepare-btn" :class="{ active: prepareMode }" @click="prepareMode = !prepareMode">
+        {{ prepareMode ? '未完了のみ' : '全件表示' }}
       </button>
     </div>
 
-<div class="table-wrapper">
     <div class="table-container">
       <table>
         <thead>
           <tr>
-            <th>
-              補充状況
-              <button
-                class="lock-icon"
-                @click="toggleLock('status')"
-              >
-                {{ columnLock.status ? "🔒" : "🔓" }}
-              </button>
-            </th>
-
-            <th>
-              商品名
-              <button
-                class="lock-icon"
-                @click="toggleLock('name')"
-              >
-                {{ columnLock.name ? "🔒" : "🔓" }}
-              </button>
-            </th>
-
-            <th>
-              売店内MAX
-              <button
-                class="lock-icon"
-                @click="toggleLock('previous')"
-              >
-                {{ columnLock.previous ? "🔒" : "🔓" }}
-              </button>
-            </th>
-            <th>
-              取ってくる数
-              <button
-                class="lock-icon"
-                @click="toggleLock('add')"
-              >
-                {{ columnLock.add ? "🔒" : "🔓" }}
-              </button>
-            </th>
-
-            <th>
-              備考
-              <button
-                class="lock-icon"
-                @click="toggleLock('memo')"
-              >
-                {{ columnLock.memo ? "🔒" : "🔓" }}
-              </button>
-            </th>
+            <th>補充状況</th>
+            <th>商品名</th>
+            <th>補充数</th>
+            <th>備考</th>
+            <th>同期</th>
           </tr>
         </thead>
-
         <tbody>
-          <tr
-            v-for="(item,index) in filteredItems"
-            :key="index"
-            :class="{
-              selectedRow: selectedItem === item
-            }"
-          >
+          <tr v-for="report in filteredReports" :key="report.id">
             <td>
-              <div class="status-wrapper">
-
-                <button
-                  class="status-btn"
-                  :class="{
-                    pending:item.status==='未補充',
-                    outstock:item.status==='在庫無い為未補充',
-                    complete:item.status==='完了'
-                  }"
-                  @click="columnLock.status
-                  ? checkLock('status')
-                  : openStatusModal(item)"
-                >
-                  {{ item.status }}
-                </button>
-
-                <button
-                  class="remove-btn"
-                  @click="deleteRow(index)"
-                >
-                  ×
-                </button>
-
+              <select
+                :value="rowValues[report.id]?.status ?? report.status"
+                :disabled="readonly"
+                :class="rowValues[report.id]?.status ?? report.status"
+                @change="updateStatus(report, $event)"
+              >
+                <option v-for="(label, status) in statusLabels" :key="status" :value="status">
+                  {{ label }}
+                </option>
+              </select>
+            </td>
+            <td>{{ report.product?.name ?? '不明な商品' }}</td>
+            <td>
+              <div class="quantity-field">
+                <input
+                  :value="rowValues[report.id]?.quantity ?? String(report.quantity)"
+                  type="number"
+                  min="1"
+                  step="1"
+                  :disabled="readonly"
+                  @input="updateQuantity(report, $event)"
+                />
+                <span>{{ report.product?.unit ?? '' }}</span>
               </div>
             </td>
-
-            <td
-              class="sticky-name">
-              <input 
-                v-model="item.name" 
-                :readonly="columnLock.name"
-                @click="checkLock('name')"
-              />
-
-            </td>
-
             <td>
               <input
-                type="number"
-                v-model.number="item.previous"
-                :readonly="columnLock.previous"
-                @click="checkLock('previous')"
+                :value="rowValues[report.id]?.note ?? report.note ?? ''"
+                type="text"
+                :disabled="readonly"
+                placeholder="任意"
+                @input="updateNote(report, $event)"
               />
             </td>
-
-            <td class="sticky-add">
-              <input
-                type="number"
-                v-model.number="item.add"
-                :readonly="columnLock.add"
-                @click="checkLock('add')"
-              />
-            </td>
-
             <td>
-              <input 
-                v-model="item.memo"
-                :readonly="columnLock.memo"
-                @click="checkLock('memo')"
+              <span class="save-state" :class="rowStates[report.id]">
+                {{ stateLabel(rowStates[report.id]) }}
+              </span>
+            </td>
+          </tr>
+
+          <tr v-if="!readonly" class="draft-row">
+            <td><span class="new-badge">新規</span></td>
+            <td>
+              <select
+                v-model.number="draftProductId"
+                :disabled="draftState === 'saving'"
+                @change="scheduleDraftSave"
+              >
+                <option value="" disabled>商品を選択</option>
+                <option v-for="product in products" :key="product.id" :value="product.id">
+                  {{ product.name }}
+                </option>
+              </select>
+            </td>
+            <td>
+              <input
+                v-model="draftQuantity"
+                type="number"
+                min="1"
+                step="1"
+                placeholder="補充数"
+                :disabled="draftState === 'saving'"
+                @input="scheduleDraftSave"
               />
             </td>
+            <td>
+              <input
+                v-model="draftNote"
+                type="text"
+                placeholder="任意"
+                :disabled="draftState === 'saving'"
+                @input="scheduleDraftSave"
+              />
+            </td>
+            <td>
+              <span class="save-state" :class="draftState">{{ stateLabel(draftState) }}</span>
+            </td>
+          </tr>
+
+          <tr v-if="filteredReports.length === 0 && readonly">
+            <td colspan="5" class="empty">補充依頼はありません</td>
           </tr>
         </tbody>
       </table>
-      </div>
     </div>
-
-    <div
-  v-if="showModal"
-  class="modal-overlay"
->
-  <div class="modal">
-    <button
-      class="modal-close"
-      @click="showModal = false"
-    >
-      ×
-    </button>
-
-    <h3>補充状況を選択</h3>
-
-    <button
-      class="status-option status-red"
-      @click="setStatus('未補充')"
-    >
-      未補充
-    </button>
-
-    <button
-      class="status-option status-gray"
-      @click="setStatus('在庫無い為未補充')"
-    >
-      在庫無い為未補充
-    </button>
-
-    <button
-      class="status-option status-green"
-      @click="setStatus('完了')"
-    >
-      完了
-    </button>
-  </div>
-</div>
   </div>
 </template>
 
 <style scoped>
-.d-table{
-  margin-bottom:40px;
+.d-table {
+  margin-bottom: 34px;
 }
 
-.header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-bottom:20px;
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
 }
 
-.header-buttons{
-  display:flex;
-  gap:10px;
+.header h3,
+.header p {
+  margin: 0;
 }
 
-.prepare-btn{
-  background:#ef4444;
-  color:white;
-  border:none;
-  padding:10px 25px;
-  border-radius:6px;
-  cursor:pointer;
+.header p {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
 }
 
-.prepare-btn.active{
-  background:#2563eb;
+.prepare-btn {
+  border: 0;
+  border-radius: 8px;
+  background: #e2e8f0;
+  color: #334155;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-weight: 700;
 }
 
-.clear-btn{
-  background:#6b7280;
-  color:white;
-  border:none;
-  padding:10px 25px;
-  border-radius:6px;
-  cursor:pointer;
+.prepare-btn.active {
+  background: #2563eb;
+  color: white;
 }
 
-.clear-btn:hover{
-  background:#4b5563;
+.table-container {
+  overflow-x: auto;
+  border: 1px solid #dbe4ee;
+  border-radius: 12px;
 }
 
-.toolbar{
-  margin-bottom:15px;
-}
-
-.toolbar button{
-  padding:8px 15px;
-  cursor:pointer;
-}
-
-.table-container{
-  overflow-x:auto;
-  width:100%;
-}
-
-table{
-  width:max-content;
-  min-width:100%;
-  border-collapse:collapse;
-  background:white;
+table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  background: white;
 }
 
 th,
-td{
-  border:1px solid #ddd;
-  padding:10px;
-  white-space:nowrap;
+td {
+  padding: 10px;
+  border-right: 1px solid #e2e8f0;
+  border-bottom: 1px solid #e2e8f0;
+  text-align: left;
 }
 
-th{
-  background:#f3f5f8;
-  text-align:center;
+th:last-child,
+td:last-child {
+  border-right: 0;
 }
 
-input{
-  border:none;
-  outline:none;
-  background:transparent;
-  min-width:100px;
-  width:100%;
-  padding:4px;
+tbody tr:last-child td {
+  border-bottom: 0;
 }
 
-.status-wrapper{
-  display:flex;
-  align-items:center;
-  gap:12px;
+th {
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 13px;
 }
 
-.status-btn{
-  color:white;
-  border:none;
-  padding:6px 12px;
-  border-radius:5px;
-  cursor:pointer;
-  min-width:120px;
+input,
+select {
+  width: 100%;
+  min-width: 110px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: white;
+  padding: 8px 10px;
+  font: inherit;
 }
 
-.pending{
-  background:#ef4444;
+input:focus,
+select:focus {
+  border-color: #2563eb;
+  outline: 3px solid rgba(37, 99, 235, 0.12);
 }
 
-.outstock{
-  background:#9ca3af;
+input:disabled,
+select:disabled {
+  background: #f1f5f9;
+  color: #64748b;
 }
 
-.complete{
-  background:#22c55e;
+select.requested {
+  color: #dc2626;
 }
 
-.remove-btn{
-  background:none;
-  border:none;
-  color:#ef4444;
-  font-size:22px;
-  cursor:pointer;
+select.working {
+  color: #b45309;
 }
 
-.modal-overlay{
-  position:fixed;
-  inset:0;
-  background:rgba(0,0,0,.4);
-  z-index:1000;
-
-  display:flex;
-  justify-content:center;
-  align-items:center;
+select.completed {
+  color: #15803d;
 }
 
-.modal{
-  position:relative;
-
-  background:white;
-  padding:30px;
-  border-radius:10px;
-  width:320px;
-
-  display:flex;
-  flex-direction:column;
-  gap:12px;
-
-  z-index:1002;
-}
-.modal-close{
-  position:absolute;
-  top:8px;
-  right:12px;
-
-  border:none;
-  background:none;
-
-  font-size:28px;
-  cursor:pointer;
-
-  color:#555;
+.quantity-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.modal-close:hover{
-  color:#000;
+.quantity-field span {
+  color: #64748b;
 }
 
-.status-option{
-  border:none;
-  padding:12px;
-  border-radius:6px;
-  color:white;
-  cursor:pointer;
+.draft-row {
+  background: #eff6ff;
 }
 
-.status-red{
-  background:#ef4444;
+.new-badge {
+  display: inline-block;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 800;
 }
 
-.status-gray{
-  background:#9ca3af;
+.save-state {
+  color: #64748b;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
-.status-green{
-  background:#22c55e;
+.save-state.saved {
+  color: #15803d;
 }
 
-.lock-icon{
-  margin-left:6px;
-  width:22px;
-  height:22px;
-  border-radius:50%;
-  border:none;
-  background:white;
-  box-shadow:
-    0 1px 4px rgba(0,0,0,.25);
-  font-size:13px;
-  cursor:pointer;
-  display:inline-flex;
-  justify-content:center;
-  align-items:center;
-  vertical-align:middle;
+.save-state.error {
+  color: #dc2626;
+  font-weight: 700;
 }
 
-/* ロック時入力不可 */
-input[readonly]{
-  cursor:not-allowed;
-  background:#f3f4f6;
+.empty {
+  color: #64748b;
+  text-align: center;
 }
-
-/* 警告 */
-.lock-warning{
-  position:sticky;
-  top:0;
-  z-index:2000;
-  background:#fee2e2;
-  color:#dc2626;
-  border:1px solid #dc2626;
-  padding:12px;
-  text-align:center;
-  font-weight:bold;
-  margin-bottom:10px;
-  border-radius:6px;
-}
-
-.mode-popup{
-  position:sticky;
-  top:0;
-  z-index:1999;
-  background:#dbeafe;
-  color:#1d4ed8;
-  border:1px solid #2563eb;
-  padding:12px;
-  text-align:center;
-  font-weight:bold;
-  margin-bottom:10px;
-  border-radius:6px;
-}
-
 </style>

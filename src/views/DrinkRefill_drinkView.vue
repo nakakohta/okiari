@@ -1,30 +1,38 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
+import DTable from '@/components/RestockTable/DTable.vue'
+import { useRealtimeRefresh } from '@/composables/useRealtimeRefresh'
 import { mastersService, reportService } from '@/lib/services'
 import { useAuthStore } from '@/stores/auth'
-import type { Product, RestockReport, RestockStatus, Store } from '@/lib/types'
-import DTable from '@/components/RestockTable/DTable.vue'
-
-const statusLabels: Record<RestockStatus, string> = {
-  requested: '依頼',
-  working: '対応中',
-  completed: '完了',
-  cancelled: '取消',
-}
+import type { Product, RestockReport, Store } from '@/lib/types'
 
 const auth = useAuthStore()
 const stores = ref<Store[]>([])
 const products = ref<Product[]>([])
 const reports = ref<RestockReport[]>([])
-const storeId = ref<number | ''>('')
-const productId = ref<number | ''>('')
-const quantity = ref(1)
-const note = ref('')
 const loading = ref(false)
-const saving = ref(false)
 const errorMessage = ref('')
+
+const activeStores = computed(() => stores.value.filter(
+  (store) => store.is_active && auth.canViewStore(store.id),
+))
+
+function reportsForStore(storeId: number) {
+  return reports.value.filter((report) => report.store_id === storeId)
+}
+
+async function loadReports(silent = false) {
+  if (!silent) loading.value = true
+  try {
+    reports.value = await reportService.drinkRefills()
+  } catch {
+    errorMessage.value = 'ドリンク補充情報を取得できませんでした'
+  } finally {
+    if (!silent) loading.value = false
+  }
+}
 
 async function load() {
   loading.value = true
@@ -36,7 +44,7 @@ async function load() {
       reportService.drinkRefills(),
     ])
     stores.value = storeData
-    products.value = productData
+    products.value = productData.filter((product) => product.is_active)
     reports.value = reportData
   } catch {
     errorMessage.value = 'ドリンク補充情報を取得できませんでした'
@@ -45,299 +53,76 @@ async function load() {
   }
 }
 
-async function save() {
-  if (storeId.value === '' || productId.value === '') {
-    errorMessage.value = '場所と商品を選択してください'
+function mergeSavedReport(saved: RestockReport) {
+  const index = reports.value.findIndex((report) => report.id === saved.id)
+  if (index >= 0) {
+    reports.value[index] = saved
     return
   }
-  saving.value = true
-  errorMessage.value = ''
-  try {
-    await reportService.createDrinkRefill({
-      store_id: Number(storeId.value),
-      product_id: Number(productId.value),
-      quantity: quantity.value,
-      note: note.value || null,
-    })
-    quantity.value = 1
-    note.value = ''
-    await load()
-  } catch {
-    errorMessage.value = 'ドリンク補充依頼を保存できませんでした'
-  } finally {
-    saving.value = false
-  }
+  reports.value.unshift(saved)
 }
 
-async function updateStatus(report: RestockReport, status: RestockStatus) {
-  errorMessage.value = ''
-  try {
-    const updated = await reportService.updateDrinkStatus(report.id, status)
-    reports.value = reports.value.map((item) => (item.id === report.id ? updated : item))
-  } catch {
-    errorMessage.value = 'ステータスを更新できませんでした'
-  }
+function showSaveError(message: string) {
+  errorMessage.value = message
 }
+
+const { realtimeState } = useRealtimeRefresh('restock_reports', () => loadReports(true))
 
 onMounted(load)
 </script>
 
 <template>
   <div class="layout">
-  <Sidebar />
-  <main class="content">
-    <div class="meal-report">
+    <Sidebar />
+    <main class="content">
+      <AppHeader title="ドリンク補充" description="補充依頼を自動保存し、他の端末へ同期します。" />
 
-      <!-- 目次 -->
       <div class="store-menu">
-        <h1>売店一覧</h1>
-
-        <div class="store-links">
-          <a href="#csl">CSL</a>
-          <a href="#store2-1">2-1</a>
-          <a href="#store2-2">2-2</a>
-          <a href="#store2-7">2-7</a>
-          <a href="#store2-8">2-8</a>
-          <a href="#store3-1">3-1</a>
-          <a href="#store3-5">3-5</a>
-          <a href="#store3-9">3-9</a>
-          <a href="#store3-11">3-11</a>
+        <div class="menu-header">
+          <h1>売店一覧</h1>
+          <span class="realtime-state" :class="realtimeState">
+            {{ realtimeState === 'connected' ? '● リアルタイム接続中' : '○ 再接続中' }}
+          </span>
         </div>
+        <nav class="store-links" aria-label="売店一覧">
+          <a v-for="store in activeStores" :key="store.id" :href="`#store-${store.id}`">
+            {{ store.name }}
+          </a>
+        </nav>
       </div>
 
-      <!-- CSL -->
-      <section id="csl" class="store-section">
-        <h2 class="store-title">
-          CSL（コートサイドラウンジ）
-        </h2>
+      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
+      <p v-if="loading" class="muted">読み込み中...</p>
 
-        <h3>ドリンク補充</h3>
-        <DTable/>
-
-
-        <h3>消耗品補充</h3>
-        <DTable/>
+      <section
+        v-for="store in activeStores"
+        :id="`store-${store.id}`"
+        :key="store.id"
+        class="store-section"
+      >
+        <h2 class="store-title">{{ store.name }}</h2>
+        <DTable
+          :store="store"
+          :products="products"
+          :reports="reportsForStore(store.id)"
+          :readonly="!auth.canEditStore(store.id)"
+          @saved="mergeSavedReport"
+          @error="showSaveError"
+        />
       </section>
 
-      <!-- 2-1 -->
-      <section id="store2-1" class="store-section">
-        <h2 class="store-title">2-1</h2>
-
-        <h3>ドリンク補充</h3>
-        <DTable/>
-
-        <h3>消耗品補充</h3>
-        <DTable/>
-      </section>
-
-      <!-- 2-2 -->
-      <section id="store2-2" class="store-section">
-        <h2 class="store-title">2-2</h2>
-
-        <h3>ドリンク補充</h3>
-        <DTable/>
-
-        <h3>消耗品補充</h3>
-        <DTable/>
-      </section>
-
-      <!-- 2-7 -->
-      <section id="store2-7" class="store-section">
-        <h2 class="store-title">2-7</h2>
-
-        <h3>ドリンク補充</h3>
-        <DTable/>
-
-        <h3>消耗品補充</h3>
-        <DTable/>
-      </section>
-
-      <!-- 2-8 -->
-      <section id="store2-8" class="store-section">
-        <h2 class="store-title">2-8</h2>
-
-        <h3>ドリンク補充</h3>
-        <DTable/>
-
-        <h3>消耗品補充</h3>
-        <DTable/>
-      </section>
-
-      <!-- 3-1 -->
-      <section id="store3-1" class="store-section">
-        <h2 class="store-title">3-1</h2>
-
-        <h3>ドリンク補充</h3>
-        <DTable/>
-
-        <h3>消耗品補充</h3>
-        <DTable/>
-      </section>
-
-      <!-- 3-5 -->
-      <section id="store3-5" class="store-section">
-        <h2 class="store-title">3-5</h2>
-
-          <h3>ドリンク補充</h3>
-          <DTable/>
-
-          <h3>消耗品補充</h3>
-          <DTable/>
-        </section>
-
-        <!-- 3-9 -->
-        <section id="store3-9" class="store-section">
-          <h2 class="store-title">3-9</h2>
-
-          <h3>ドリンク補充</h3>
-          <DTable/>
-
-          <h3>消耗品補充</h3>
-          <DTable/>
-        </section>
-
-        <!-- 3-11 -->
-        <section id="store3-11" class="store-section">
-          <h2 class="store-title">
-            3-11（スイートラウンジ）
-          </h2>
-
-          <h3>ドリンク補充</h3>
-          <DTable/>
-
-          <h3>消耗品補充</h3>
-          <DTable/>
-        </section>
-      </div>
-      </main>
-    </div>
+      <p v-if="!loading && activeStores.length === 0" class="empty">
+        表示できる売店がありません。
+      </p>
+    </main>
+  </div>
 </template>
 
 <style scoped>
-.layout{
-  display:flex;
-  min-height:100vh;
-}
 .content {
   flex: 1;
+  min-width: 0;
   padding: 40px;
-}
-
-.panel {
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  padding: 24px;
-  margin-bottom: 24px;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(150px, 1fr));
-  gap: 14px;
-  align-items: end;
-}
-
-label {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-weight: 700;
-}
-
-input,
-select {
-  padding: 10px 12px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-}
-
-.wide {
-  grid-column: span 2;
-}
-
-button {
-  border: none;
-  background: #ff7a00;
-  color: white;
-  padding: 10px 14px;
-  border-radius: 8px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-button.secondary {
-  background: #e2e8f0;
-  color: #334155;
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-h2 {
-  margin: 0 0 16px;
-  font-size: 20px;
-  font-weight: 800;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th,
-td {
-  padding: 12px;
-  border-bottom: 1px solid #eef2f7;
-  text-align: left;
-}
-
-.status {
-  display: inline-block;
-  border-radius: 999px;
-  padding: 5px 10px;
-  font-weight: 800;
-  font-size: 12px;
-}
-
-.requested {
-  background: #dbeafe;
-  color: #1d4ed8;
-}
-.working {
-  background: #fef3c7;
-  color: #92400e;
-}
-.completed {
-  background: #dcfce7;
-  color: #15803d;
-}
-.cancelled {
-  background: #fee2e2;
-  color: #b91c1c;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.empty,
-.muted {
-  color: #64748b;
-}
-
-.error {
-  color: #b91c1c;
-  background: #fee2e2;
-  padding: 10px 12px;
-  border-radius: 8px;
-}
-.meal-report {
-  padding: 30px;
   background: #f5f7fa;
 }
 
@@ -345,46 +130,89 @@ td {
   position: sticky;
   top: 20px;
   z-index: 100;
+  margin-bottom: 36px;
+  padding: 20px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
   background: white;
-  padding: 25px;
-  border-radius: 12px;
-  margin-bottom: 40px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.menu-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.menu-header h1 {
+  margin: 0;
+  font-size: 22px;
 }
 
 .store-links {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 15px;
+  gap: 9px;
+  margin-top: 14px;
 }
 
 .store-links a {
-  text-decoration: none;
-  background: #2f6df6;
-  color: white;
-  padding: 10px 18px;
   border-radius: 8px;
+  background: #2563eb;
+  color: white;
+  padding: 8px 14px;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.realtime-state {
+  color: #b45309;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.realtime-state.connected {
+  color: #15803d;
 }
 
 .store-section {
-  scroll-margin-top: 210px;
-  margin-bottom: 80px;
+  scroll-margin-top: 220px;
+  margin-bottom: 38px;
+  padding: 24px;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: white;
 }
 
 .store-title {
-  font-size: 32px;
-  margin-bottom: 25px;
-  border-left: 6px solid #2f6df6;
-  padding-left: 15px;
+  margin: 0 0 22px;
+  padding-left: 13px;
+  border-left: 5px solid #2563eb;
+  font-size: 26px;
 }
 
-h3 {
-  margin-top: 30px;
-  margin-bottom: 15px;
+.error {
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fee2e2;
+  color: #b91c1c;
 }
 
-html {
-  scroll-behavior: smooth;
+.empty,
+.muted {
+  color: #64748b;
 }
 
+@media (max-width: 768px) {
+  .content {
+    padding: 20px;
+  }
+
+  .menu-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 </style>
