@@ -41,7 +41,7 @@ async function save(row: MTableRow, field: Field) {
   if (scheduled) clearTimeout(scheduled)
   timers.delete(timerKey)
   if (field === 'expected_quantity' || field === 'actual_quantity') row[field] = Math.max(0, Number(row[field]) || 0)
-  try { await boardService.update('inventory', 'm-rows', row.id, { [field]: row[field] }); pending.delete(timerKey); emit('refresh') }
+  try { await boardService.update('inventory', 'm-rows', row.id, { [field]: row[field] }); pending.delete(timerKey) }
   catch {
     emit('error', '棚卸内容を保存できませんでした。再接続後に自動で再試行します。')
     timers.set(timerKey, setTimeout(() => void save(row, field), 2000))

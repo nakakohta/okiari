@@ -5,6 +5,7 @@ import Sidebar from '@/components/AppSidebar.vue'
 import MTable from '@/components/RestockTable/MTable.vue'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
+import { mergeBoardChange } from '@/lib/boardRealtime'
 import { useAuthStore } from '@/stores/auth'
 import type { InventoryBoardData, Product, Store } from '@/lib/types'
 
@@ -22,7 +23,9 @@ async function load(silent = false) {
   } catch { errorMessage.value = '棚卸表を取得できませんでした。' }
   finally { if (!silent) loading.value = false }
 }
-const { realtimeState } = useRealtimeBoard('inventory', () => load(true))
+const { realtimeState } = useRealtimeBoard('inventory', () => load(true), (change) => (
+  data.value ? mergeBoardChange(data.value as InventoryBoardData & Record<string, unknown>, change) : false
+))
 onMounted(load)
 </script>
 

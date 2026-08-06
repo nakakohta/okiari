@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter
 
 from app.core.audit import write_audit_log
-from app.core.auth import AdminUser, AuthenticatedUser
+from app.core.auth import AdminUser, AuthenticatedUser, invalidate_user_profile_cache
 from app.core.db import (
     USER_SELECT,
     active_admin_count,
@@ -186,6 +186,7 @@ def update_user(user_id: UUID, payload: UserUpdate, current_user: AdminUser) -> 
         before=before,
         after=after,
     )
+    invalidate_user_profile_cache(user_id_str)
     return after
 
 
@@ -215,6 +216,7 @@ def update_user_role(user_id: UUID, payload: UserRoleUpdate, current_user: Admin
         before=before,
         after=after,
     )
+    invalidate_user_profile_cache(user_id_str)
     return after
 
 
@@ -242,4 +244,5 @@ def update_user_status(user_id: UUID, payload: UserStatusUpdate, current_user: A
         before=before,
         after=after,
     )
+    invalidate_user_profile_cache(user_id_str)
     return after

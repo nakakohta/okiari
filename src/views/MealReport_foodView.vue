@@ -5,6 +5,7 @@ import Sidebar from '@/components/AppSidebar.vue'
 import MFTable from '@/components/RestockTable/MFTable.vue'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
+import { mergeBoardChange } from '@/lib/boardRealtime'
 import { useAuthStore } from '@/stores/auth'
 import type { MealFoodBoardData, MFTableSection, Store } from '@/lib/types'
 
@@ -53,7 +54,9 @@ async function drop(index: number) {
   try { await boardService.reorder('meal-food', 'mf-sections', ordered.map((section) => section.id)); await load(true) }
   catch { errorMessage.value = '売店の並び順を保存できませんでした。' }
 }
-const { realtimeState } = useRealtimeBoard('meal-food', () => load(true))
+const { realtimeState } = useRealtimeBoard('meal-food', () => load(true), (change) => (
+  data.value ? mergeBoardChange(data.value as MealFoodBoardData & Record<string, unknown>, change) : false
+))
 onMounted(load)
 </script>
 

@@ -70,7 +70,6 @@ async function save(row: DTableRow, field: EditableField) {
     if (field === 'max_quantity' || field === 'requested_quantity') row[field] = Math.max(0, Number(row[field]) || 0)
     await boardService.update('drink-refill', 'd-rows', row.id, { [field]: row[field] })
     pending.delete(key)
-    emit('refresh')
   } catch {
     emit('error', '入力内容を保存できませんでした。接続復旧後にもう一度入力してください。')
     timers.set(key, setTimeout(() => void save(row, field), 2000))
@@ -102,7 +101,6 @@ async function setStatus(status: DTableRow['status']) {
   selected.value = null
   try {
     await boardService.update('drink-refill', 'd-rows', row.id, { status })
-    emit('refresh')
   } catch { emit('error', '補充状況を保存できませんでした。') }
 }
 

@@ -5,6 +5,7 @@ import Sidebar from '@/components/AppSidebar.vue'
 import MDTable from '@/components/RestockTable/MDTable.vue'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
+import { mergeBoardChange } from '@/lib/boardRealtime'
 import { useAuthStore } from '@/stores/auth'
 import type { MealDrinkBoardData, Store } from '@/lib/types'
 
@@ -34,7 +35,9 @@ function canEditBooth(name: string) {
   const store = stores.value.find((item) => item.name === name)
   return Boolean(store && auth.canEditStore(store.id))
 }
-const { realtimeState } = useRealtimeBoard('meal-drink', () => load(true))
+const { realtimeState } = useRealtimeBoard('meal-drink', () => load(true), (change) => (
+  data.value ? mergeBoardChange(data.value as MealDrinkBoardData & Record<string, unknown>, change) : false
+))
 onMounted(load)
 </script>
 

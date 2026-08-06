@@ -71,7 +71,6 @@ async function saveCell(rowId: number, columnId: number) {
     if (existing) await boardService.update('meal-drink', 'md-cells', existing.id, { value: values.value[cellKey] ?? '' })
     else await boardService.create('meal-drink', 'md-cells', { row_id: rowId, column_id: columnId, value: values.value[cellKey] ?? '' })
     pending.delete(cellKey)
-    emit('refresh')
   } catch { emit('error', '食数を保存できませんでした。') }
   if (pending.has(cellKey) && !timers.has(cellKey)) timers.set(cellKey, setTimeout(() => void saveCell(rowId, columnId), 2000))
 }
@@ -86,7 +85,7 @@ function scheduleCell(rowId: number, columnId: number) {
 }
 
 async function saveRow(row: MDTableRow, fields: Record<string, unknown>) {
-  try { await boardService.update('meal-drink', 'md-rows', row.id, fields); emit('refresh') }
+  try { await boardService.update('meal-drink', 'md-rows', row.id, fields) }
   catch { emit('error', '売店名を保存できませんでした。') }
 }
 
@@ -94,7 +93,7 @@ async function saveCustomBooth(row: MDTableRow) {
   const scheduled = rowTimers.get(row.id)
   if (scheduled) clearTimeout(scheduled)
   rowTimers.delete(row.id)
-  try { await boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }); emit('refresh') }
+  try { await boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }) }
   catch {
     emit('error', 'その他売店名を保存できませんでした。再接続後に自動で再試行します。')
     rowTimers.set(row.id, setTimeout(() => void saveCustomBooth(row), 2000))
@@ -134,7 +133,7 @@ async function saveColumn(column: MDTableColumn) {
   const scheduled = columnTimers.get(column.id)
   if (scheduled) clearTimeout(scheduled)
   columnTimers.delete(column.id)
-  try { await boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }); emit('refresh') }
+  try { await boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }) }
   catch {
     emit('error', '列名を保存できませんでした。再接続後に自動で再試行します。')
     columnTimers.set(column.id, setTimeout(() => void saveColumn(column), 2000))

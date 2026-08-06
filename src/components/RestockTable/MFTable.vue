@@ -53,7 +53,7 @@ async function save(resource: 'mf-rows' | 'mf-containers', id: number, field: Ro
   if (scheduled) clearTimeout(scheduled)
   timers.delete(timerKey)
   const normalized = field === 'quantity' ? Math.max(0, Number(value) || 0) : value
-  try { await boardService.update('meal-food', resource, id, { [field]: normalized }); emit('refresh') }
+  try { await boardService.update('meal-food', resource, id, { [field]: normalized }) }
   catch {
     emit('error', '入力内容を保存できませんでした。再接続後に自動で再試行します。')
     timers.set(timerKey, setTimeout(() => void save(resource, id, field, normalized), 2000))
@@ -91,7 +91,7 @@ async function remove(resource: 'mf-rows' | 'mf-containers', id: number, label: 
 async function selectType(container: MFTableContainer, type: MFTableContainer['container_type']) {
   container.container_type = type
   if (type !== 'register' && container.quantity === 0) container.quantity = 100
-  try { await boardService.update('meal-food', 'mf-containers', container.id, { container_type: type, quantity: container.quantity }); openMenu.value = null; emit('refresh') }
+  try { await boardService.update('meal-food', 'mf-containers', container.id, { container_type: type, quantity: container.quantity }); openMenu.value = null }
   catch { emit('error', '容器種別を保存できませんでした。') }
 }
 
@@ -111,7 +111,7 @@ async function drop(index: number) {
   ordered.splice(index, 0, moved)
   localRows.value = ordered
   draggedRow.value = null
-  try { await boardService.reorder('meal-food', 'mf-rows', ordered.map((row) => row.id)); emit('refresh') }
+  try { await boardService.reorder('meal-food', 'mf-rows', ordered.map((row) => row.id)) }
   catch { emit('error', '品目の並び順を保存できませんでした。') }
 }
 
