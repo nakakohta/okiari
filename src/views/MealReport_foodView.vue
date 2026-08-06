@@ -1,268 +1,75 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
 import MFTable from '@/components/RestockTable/MFTable.vue'
+import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
+import { boardService, mastersService } from '@/lib/services'
+import { useAuthStore } from '@/stores/auth'
+import type { MealFoodBoardData, MFTableSection, Store } from '@/lib/types'
 
-type StoreSection = {
-  id: number
-  name: string
+const auth = useAuthStore()
+const data = ref<MealFoodBoardData | null>(null)
+const stores = ref<Store[]>([])
+const loading = ref(false)
+const errorMessage = ref('')
+const dragged = ref<number | null>(null)
+const sections = computed(() => [...(data.value?.mftable_sections ?? [])].sort((a, b) => a.sort_order - b.sort_order))
+const availableStores = computed(() => stores.value.filter((store) => store.is_active && auth.canViewStore(store.id)))
+
+async function load(silent = false) {
+  if (!silent) loading.value = true
+  try {
+    const [board, storeData] = await Promise.all([boardService.mealFood(), mastersService.stores()])
+    data.value = board; stores.value = storeData; errorMessage.value = ''
+  } catch { errorMessage.value = '食数報告（フード）を取得できませんでした。' }
+  finally { if (!silent) loading.value = false }
 }
 
-const storeOptions = [
-  "CSL",
-  "2-1",
-  "2-2",
-  "2-3",
-  "2-4",
-  "2-5",
-  "2-6",
-  "2-7",
-  "2-8",
-  "3-1",
-  "3-3",
-  "3-5",
-  "3-7",
-  "3-9",
-  "3-11",
-  "その他",
-]
-
-const tableSections = ref<StoreSection[]>([
-  {
-    id: 1,
-    name: "CSL",
-  },
-])
-
-let nextSectionId = 2
-
-function addStoreSection() {
-  tableSections.value.push({
-    id: nextSectionId++,
-    name: "CSL",
-  })
+async function addSection() {
+  const store = availableStores.value.find((item) => auth.canEditStore(item.id))
+  if (!store) { errorMessage.value = '編集できる売店がありません。'; return }
+  try { await boardService.create('meal-food', 'mf-sections', { store_id: store.id, store_name: store.name, sort_order: sections.value.length }); await load(true) }
+  catch { errorMessage.value = '売店セクションを追加できませんでした。' }
 }
-
-function removeStoreSection(id: number) {
-  if (!confirm("この売店を削除しますか？")) return
-
-  tableSections.value = tableSections.value.filter(
-    section => section.id !== id
-  )
+async function changeStore(section: MFTableSection, event: Event) {
+  const storeId = Number((event.target as HTMLSelectElement).value)
+  const store = stores.value.find((item) => item.id === storeId)
+  if (!store) return
+  try { await boardService.update('meal-food', 'mf-sections', section.id, { store_id: store.id, store_name: store.name }); await load(true) }
+  catch { errorMessage.value = '売店名を保存できませんでした。'; await load(true) }
 }
-
-const draggedSectionIndex = ref<number | null>(null)
-
-function dragStartSection(index: number) {
-  draggedSectionIndex.value = index
+async function removeSection(section: MFTableSection) {
+  if (!confirm('この売店を削除しますか？')) return
+  try { await boardService.remove('meal-food', 'mf-sections', section.id); await load(true) }
+  catch { errorMessage.value = '売店を削除できませんでした。' }
 }
-
-function dragOverSection(event: DragEvent) {
-  event.preventDefault()
-}
-
-function dropSection(index: number) {
-  if (
-    draggedSectionIndex.value === null ||
-    draggedSectionIndex.value === index
-  ) {
-    return
-  }
-
-  const moved = tableSections.value.splice(
-    draggedSectionIndex.value,
-    1
-  )[0]
-
+async function drop(index: number) {
+  if (dragged.value === null || dragged.value === index) return
+  const ordered = [...sections.value]
+  const [moved] = ordered.splice(dragged.value, 1)
   if (!moved) return
-  tableSections.value.splice(index, 0, moved)
-
-  draggedSectionIndex.value = null
+  ordered.splice(index, 0, moved); dragged.value = null
+  try { await boardService.reorder('meal-food', 'mf-sections', ordered.map((section) => section.id)); await load(true) }
+  catch { errorMessage.value = '売店の並び順を保存できませんでした。' }
 }
-
+const { realtimeState } = useRealtimeBoard('meal-food', () => load(true))
+onMounted(load)
 </script>
 
-
 <template>
-  <div class="layout">
-    <Sidebar />
-    <main class="content">
-      <AppHeader title="食数報告(フード)" description="場所・商品ごとの食数を登録します。" />
-<section
-  v-for="(section, index) in tableSections"
-  :key="section.id"
-  class="table-section"
-  draggable="true"
-  @dragstart="dragStartSection(index)"
-  @dragover="dragOverSection"
-  @drop="dropSection(index)"
->
-  <div class="section-header">
-
-  <div class="section-left">
-    <span class="section-grip">⋮⋮</span>
-
-    <select
-      v-model="section.name"
-      class="store-select"
-    >
-      <option
-        v-for="store in storeOptions"
-        :key="store"
-        :value="store"
-      >
-        {{ store }}
-      </option>
-    </select>
-  </div>
-
-  <button
-    class="delete-btn"
-    @click="removeStoreSection(section.id)"
-  >
-    🗑
-  </button>
-
-</div>
-
-<MFTable />
-
-</section>
-
-<div class="add-section">
-  <button
-    class="add-btn"
-    @click="addStoreSection"
-  >
-    ＋ 売店を追加
-  </button>
-</div>
-    </main>
-  </div>
+  <div class="layout"><Sidebar /><main class="content">
+    <AppHeader title="食数報告（フード）" description="品目・容器・割合は自動保存され、同じ表を開いているユーザーへ反映されます。" />
+    <div class="connection"><span :class="['realtime',realtimeState]">{{ realtimeState === 'connected' ? '● リアルタイム接続中' : '● 再接続中' }}</span></div>
+    <p v-if="errorMessage" class="error">{{ errorMessage }}</p><p v-if="loading" class="muted">読み込み中...</p>
+    <section v-for="(section,index) in sections" :key="section.id" class="table-section" draggable="true" @dragstart="dragged = index" @dragover.prevent @drop="drop(index)">
+      <div class="section-header"><div class="section-left"><span class="grip">⠿</span><select :value="section.store_id ?? ''" :disabled="!section.store_id || !auth.canEditStore(section.store_id)" @change="changeStore(section,$event)"><option v-for="store in availableStores" :key="store.id" :value="store.id">{{ store.name }}</option></select></div><button v-if="auth.canManage" class="delete" @click="removeSection(section)">削除</button></div>
+      <MFTable v-if="data" :section-id="section.id" :rows="data.mftable_rows.filter(row => row.section_id === section.id)" :containers="data.mftable_containers" :readonly="!section.store_id || !auth.canEditStore(section.store_id)" :can-delete="auth.canManage" @refresh="load(true)" @error="errorMessage = $event" />
+    </section>
+    <div class="add"><button :disabled="!auth.canEditReports" @click="addSection">＋売店を追加</button></div>
+  </main></div>
 </template>
 
-
 <style scoped>
-.section-header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-bottom:20px;
-}
-
-.section-left{
-  display:flex;
-  align-items:center;
-  gap:10px;
-}
-
-.store-select{
-  width:auto;
-  min-width:120px;
-  padding-right:24px;
-  font-size:22px;
-  font-weight:bold;
-  border:none;
-  outline:none;
-  background:transparent;
-  cursor:pointer;
-}
-
-.delete-btn{
-   margin-left:auto;
-}
-
-.content {
-  flex: 1;
-  padding: 40px;
-}
-
-h2 {
-  margin: 0 0 16px;
-  font-size: 20px;
-  font-weight: 800;
-}
-
-.empty,
-.muted {
-  color: #64748b;
-}
-
-.error {
-  color: #b91c1c;
-  background: #fee2e2;
-  padding: 10px 12px;
-  border-radius: 8px;
-}
-
-.table-section{
-  background: white;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 24px;
-  margin-bottom: 32px;
-}
-
-.table-section h2{
-  margin: 0 0 20px;
-  font-size: 22px;
-  font-weight: bold;
-}
-
-.delete-btn:hover{
-  background:#dc2626;
-  transform:scale(1.05);
-}
-
-.add-section{
-  display:flex;
-  justify-content:center;
-}
-
-.add-btn{
-  padding:14px 28px;
-  border:none;
-  border-radius:10px;
-  background:#2563eb;
-  color:white;
-  font-size:16px;
-  font-weight:bold;
-  cursor:pointer;
-  transition:.2s;
-}
-
-.add-btn:hover{
-  background:#1d4ed8;
-}
-
-.section-grip{
-  width:28px;
-  min-width:28px;
-  display:flex;
-  justify-content:center;
-  align-items:center;
-  font-size:22px;
-  color:#94a3b8;
-  cursor:grab;
-  user-select:none;
-  letter-spacing:-3px;
-  line-height:1;
-}
-
-.section-grip:active{
-  cursor:grabbing;
-}
-
-.section-grip{
-  cursor: grab;
-}
-
-.section-grip:active{
-  cursor: grabbing;
-}
-
-.table-section{
-  transition: .2s;
-}
+.content{flex:1;min-width:0;padding:40px;background:#f5f7fa}.connection{display:flex;justify-content:flex-end}.realtime{color:#b45309;font-size:13px;font-weight:700}.realtime.connected{color:#15803d}.table-section{margin:20px 0 30px;padding:24px;border:1px solid #e2e8f0;border-radius:14px;background:white}.section-header,.section-left{display:flex;align-items:center;justify-content:space-between;gap:10px}.section-left select{border:0;background:transparent;font-size:22px;font-weight:800}.grip{font-size:24px;color:#94a3b8;cursor:grab}.delete{border:0;border-radius:7px;background:#fee2e2;color:#b91c1c;padding:8px 12px}.add{display:flex;justify-content:center}.add button{border:0;border-radius:9px;background:#2563eb;color:white;padding:13px 24px;font-weight:700}.error{padding:10px;background:#fee2e2;color:#b91c1c}.muted{color:#64748b}button:disabled,select:disabled{opacity:.55}@media(max-width:700px){.content{padding:20px}}
 </style>

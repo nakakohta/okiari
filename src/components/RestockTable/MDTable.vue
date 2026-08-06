@@ -1,325 +1,218 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, watch } from 'vue'
-import { reportService } from '@/lib/services'
-import type { MealReport, Product, Store } from '@/lib/types'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { boardService } from '@/lib/services'
+import type { MDTableCell, MDTableColumn, MDTableLock, MDTableRow } from '@/lib/types'
 
-type CellSaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
-
-const props = withDefaults(
-  defineProps<{
-    title?: string
-    reportDate: string
-    stores: Store[]
-    products: Product[]
-    reports: MealReport[]
-    canEditStore: (storeId: number) => boolean
-    readonly?: boolean
-  }>(),
-  {
-    title: '',
-    readonly: false,
-  },
-)
-
-const emit = defineEmits<{
-  saved: [report: MealReport]
-  error: [message: string]
+const props = defineProps<{
+  title: string
+  floorGroup: 'first' | 'second' | 'third'
+  rows: MDTableRow[]
+  columns: MDTableColumn[]
+  cells: MDTableCell[]
+  locks: MDTableLock[]
+  canEditStructure: boolean
+  canSelectBooth: boolean
+  canManageLocks: boolean
+  canDelete: boolean
+  canEditBooth: (booth: string) => boolean
 }>()
+const emit = defineEmits<{ refresh: []; error: [message: string] }>()
 
-const cellValues = reactive<Record<string, string>>({})
-const saveStates = reactive<Record<string, CellSaveState>>({})
-const dirtyKeys = new Set<string>()
-const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
-const editVersions = new Map<string, number>()
-const pendingCells = new Map<
-  string,
-  { reportDate: string; storeId: number; productId: number }
->()
+const localRows = ref<MDTableRow[]>([])
+const localColumns = ref<MDTableColumn[]>([])
+const values = ref<Record<string, string>>({})
+const popupRowId = ref<number | null>(null)
+const timers = new Map<string, ReturnType<typeof setTimeout>>()
+const columnTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const rowTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const pending = new Set<string>()
+const composing = new Set<string>()
 
-const reportMap = computed(() => {
-  const map = new Map<string, MealReport>()
-  for (const report of props.reports) {
-    map.set(`${report.store_id}:${report.product_id}`, report)
+const boothGroups = {
+  first: ['CSL', 'VIP(ブルー)', 'VIP(レッド)', 'その他'],
+  second: ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8'],
+  third: ['3-1', '3-3', '3-5', '3-7', '3-9', '3-11(スイートラウンジ)'],
+}
+
+const boothLocked = computed(() => props.locks.some((lock) => lock.column_key === 'booth' && lock.is_locked))
+const sortedRows = computed(() => [...localRows.value].sort((a, b) => a.sort_order - b.sort_order))
+const sortedColumns = computed(() => [...localColumns.value].sort((a, b) => a.sort_order - b.sort_order))
+
+watch(() => props.rows, (rows) => {
+  localRows.value = rows.map((incoming) => {
+    const current = localRows.value.find((row) => row.id === incoming.id)
+    return current && rowTimers.has(incoming.id) ? { ...incoming, custom_booth: current.custom_booth } : { ...incoming }
+  })
+}, { immediate: true, deep: true })
+watch(() => props.columns, (columns) => {
+  localColumns.value = columns.map((incoming) => {
+    const current = localColumns.value.find((column) => column.id === incoming.id)
+    return current && columnTimers.has(incoming.id) ? { ...incoming, title: current.title } : { ...incoming }
+  })
+}, { immediate: true, deep: true })
+watch(() => props.cells, (cells) => {
+  for (const cell of cells) {
+    const key = `${cell.row_id}:${cell.column_id}`
+    if (!pending.has(key)) values.value[key] = cell.value
   }
-  return map
-})
+}, { immediate: true, deep: true })
 
-function cellKey(reportDate: string, storeId: number, productId: number) {
-  return `${reportDate}:${storeId}:${productId}`
-}
+function key(rowId: number, columnId: number) { return `${rowId}:${columnId}` }
+function displayBooth(row: MDTableRow) { return row.booth === 'その他' ? row.custom_booth || 'その他' : row.booth || 'ブース' }
+function rowEditable(row: MDTableRow) { return props.canEditBooth(row.booth) }
 
-function reportKey(storeId: number, productId: number) {
-  return `${storeId}:${productId}`
-}
-
-function syncFromReports() {
-  for (const store of props.stores) {
-    for (const product of props.products) {
-      const key = cellKey(props.reportDate, store.id, product.id)
-      if (dirtyKeys.has(key)) continue
-      const report = reportMap.value.get(reportKey(store.id, product.id))
-      cellValues[key] = report ? String(report.quantity) : ''
-      if (!saveStates[key] || saveStates[key] === 'saved') saveStates[key] = 'idle'
-    }
-  }
-}
-
-watch(
-  () => [props.reportDate, props.stores, props.products, props.reports],
-  syncFromReports,
-  { immediate: true, deep: true },
-)
-
-function scheduleSave(storeId: number, productId: number, event: Event) {
-  const input = event.target as HTMLInputElement
-  const reportDate = props.reportDate
-  const key = cellKey(reportDate, storeId, productId)
-  cellValues[key] = input.value
-  dirtyKeys.add(key)
-  editVersions.set(key, (editVersions.get(key) ?? 0) + 1)
-  saveStates[key] = 'pending'
-  pendingCells.set(key, { reportDate, storeId, productId })
-
-  const previousTimer = saveTimers.get(key)
-  if (previousTimer) clearTimeout(previousTimer)
-  saveTimers.set(
-    key,
-    setTimeout(() => {
-      saveTimers.delete(key)
-      void saveCell(key)
-    }, 450),
-  )
-}
-
-async function saveCell(key: string) {
-  const pending = pendingCells.get(key)
-  if (!pending || props.readonly || !props.canEditStore(pending.storeId)) return
-  const rawValue = cellValues[key] ?? ''
-  const savingVersion = editVersions.get(key) ?? 0
-  const quantity = rawValue === '' ? 0 : Number(rawValue)
-  if (!Number.isInteger(quantity) || quantity < 0) {
-    saveStates[key] = 'error'
-    emit('error', '食数には0以上の整数を入力してください')
-    return
-  }
-
-  saveStates[key] = 'saving'
+async function saveCell(rowId: number, columnId: number) {
+  const cellKey = key(rowId, columnId)
+  const scheduled = timers.get(cellKey)
+  if (scheduled) clearTimeout(scheduled)
+  timers.delete(cellKey)
+  const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
   try {
-    const saved = await reportService.upsertMealReport({
-      report_date: pending.reportDate,
-      store_id: pending.storeId,
-      product_id: pending.productId,
-      quantity,
-      note: null,
-    })
-    if ((editVersions.get(key) ?? 0) === savingVersion) {
-      dirtyKeys.delete(key)
-      pendingCells.delete(key)
-      cellValues[key] = String(saved.quantity)
-      saveStates[key] = 'saved'
-    } else {
-      saveStates[key] = 'pending'
-    }
-    emit('saved', saved)
-  } catch {
-    if ((editVersions.get(key) ?? 0) === savingVersion) {
-      saveStates[key] = 'error'
-      emit('error', '食数を自動保存できませんでした。入力内容は画面に残っています。')
-    }
+    if (existing) await boardService.update('meal-drink', 'md-cells', existing.id, { value: values.value[cellKey] ?? '' })
+    else await boardService.create('meal-drink', 'md-cells', { row_id: rowId, column_id: columnId, value: values.value[cellKey] ?? '' })
+    pending.delete(cellKey)
+    emit('refresh')
+  } catch { emit('error', '食数を保存できませんでした。') }
+  if (pending.has(cellKey) && !timers.has(cellKey)) timers.set(cellKey, setTimeout(() => void saveCell(rowId, columnId), 2000))
+}
+
+function scheduleCell(rowId: number, columnId: number) {
+  const cellKey = key(rowId, columnId)
+  if (composing.has(cellKey)) return
+  pending.add(cellKey)
+  const timer = timers.get(cellKey)
+  if (timer) clearTimeout(timer)
+  timers.set(cellKey, setTimeout(() => void saveCell(rowId, columnId), 450))
+}
+
+async function saveRow(row: MDTableRow, fields: Record<string, unknown>) {
+  try { await boardService.update('meal-drink', 'md-rows', row.id, fields); emit('refresh') }
+  catch { emit('error', '売店名を保存できませんでした。') }
+}
+
+async function saveCustomBooth(row: MDTableRow) {
+  const scheduled = rowTimers.get(row.id)
+  if (scheduled) clearTimeout(scheduled)
+  rowTimers.delete(row.id)
+  try { await boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }); emit('refresh') }
+  catch {
+    emit('error', 'その他売店名を保存できませんでした。再接続後に自動で再試行します。')
+    rowTimers.set(row.id, setTimeout(() => void saveCustomBooth(row), 2000))
   }
 }
-
-function stateLabel(key: string) {
-  const state = saveStates[key] ?? 'idle'
-  if (state === 'pending') return '保存待ち'
-  if (state === 'saving') return '保存中…'
-  if (state === 'saved') return '保存済み'
-  if (state === 'error') return '保存失敗'
-  return ''
+function scheduleCustomBooth(row: MDTableRow) {
+  if (composing.has(`row:${row.id}`)) return
+  const old = rowTimers.get(row.id)
+  if (old) clearTimeout(old)
+  rowTimers.set(row.id, setTimeout(() => void saveCustomBooth(row), 450))
 }
 
-onUnmounted(() => {
-  for (const [key, timer] of saveTimers) {
+function selectBooth(row: MDTableRow, booth: string) {
+  row.booth = booth
+  if (booth !== 'その他') {
+    row.custom_booth = ''
+    popupRowId.value = null
+  }
+  void saveRow(row, { booth, custom_booth: row.custom_booth })
+}
+
+async function addRow() {
+  try {
+    await boardService.create('meal-drink', 'md-rows', { floor_group: props.floorGroup, booth_type: props.floorGroup, booth: '', custom_booth: '', sort_order: localRows.value.length })
+    emit('refresh')
+  } catch { emit('error', '行を追加できませんでした。') }
+}
+
+async function addColumn() {
+  try {
+    await boardService.create('meal-drink', 'md-columns', { floor_group: props.floorGroup, title: `商品名${localColumns.value.length + 1}`, sort_order: localColumns.value.length })
+    emit('refresh')
+  } catch { emit('error', '列を追加できませんでした。') }
+}
+
+async function saveColumn(column: MDTableColumn) {
+  const scheduled = columnTimers.get(column.id)
+  if (scheduled) clearTimeout(scheduled)
+  columnTimers.delete(column.id)
+  try { await boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }); emit('refresh') }
+  catch {
+    emit('error', '列名を保存できませんでした。再接続後に自動で再試行します。')
+    columnTimers.set(column.id, setTimeout(() => void saveColumn(column), 2000))
+  }
+}
+function scheduleColumn(column: MDTableColumn) {
+  if (composing.has(`column:${column.id}`)) return
+  const old = columnTimers.get(column.id)
+  if (old) clearTimeout(old)
+  columnTimers.set(column.id, setTimeout(() => void saveColumn(column), 450))
+}
+
+async function remove(resource: 'md-rows' | 'md-columns', id: number, label: string) {
+  if (!confirm(`この${label}を削除しますか？`)) return
+  try { await boardService.remove('meal-drink', resource, id); emit('refresh') }
+  catch { emit('error', `${label}を削除できませんでした。`) }
+}
+
+async function toggleLock() {
+  try { await boardService.lock('meal-drink', { floor_group: props.floorGroup, column_key: 'booth', is_locked: !boothLocked.value }); emit('refresh') }
+  catch { emit('error', '売店列のロックを変更できませんでした。') }
+}
+
+async function clearData() {
+  if (!confirm('書き込まれている食数を一斉クリアしますか？')) return
+  try { await boardService.clear('meal-drink', { floor_group: props.floorGroup }); emit('refresh') }
+  catch { emit('error', '食数をクリアできませんでした。') }
+}
+
+function flush() {
+  for (const [cellKey, timer] of timers) {
     clearTimeout(timer)
-    void saveCell(key)
+    const [rowId, columnId] = cellKey.split(':').map(Number)
+    void saveCell(rowId!, columnId!)
   }
-  saveTimers.clear()
-})
+  for (const [columnId, timer] of columnTimers) {
+    clearTimeout(timer)
+    const column = localColumns.value.find((item) => item.id === columnId)
+    if (column) void saveColumn(column)
+  }
+  for (const [rowId, timer] of rowTimers) {
+    clearTimeout(timer)
+    const row = localRows.value.find((item) => item.id === rowId)
+    if (row) void saveCustomBooth(row)
+  }
+}
+onBeforeUnmount(flush)
 </script>
 
 <template>
   <div class="md-table">
-    <div v-if="title" class="table-heading">
-      <h3>{{ title }}</h3>
-      <span>入力内容は自動保存されます</span>
-    </div>
-
-    <div class="table-container">
-      <table>
-        <thead>
-          <tr>
-            <th class="store-column">売店名</th>
-            <th v-for="product in products" :key="product.id">
-              {{ product.name }}
-              <small>{{ product.unit }}</small>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="store in stores" :key="store.id">
-            <th class="store-name">{{ store.name }}</th>
-            <td v-for="product in products" :key="product.id">
-              <div class="cell-editor">
-                <input
-                  :value="cellValues[cellKey(reportDate, store.id, product.id)] ?? ''"
-                  type="number"
-                  min="0"
-                  step="1"
-                  inputmode="numeric"
-                  :disabled="readonly || !canEditStore(store.id)"
-                  aria-label="食数"
-                  @input="scheduleSave(store.id, product.id, $event)"
-                />
-                <span
-                  class="save-state"
-                  :class="saveStates[cellKey(reportDate, store.id, product.id)]"
-                >
-                  {{ stateLabel(cellKey(reportDate, store.id, product.id)) }}
-                </span>
-              </div>
-            </td>
-          </tr>
-          <tr v-if="stores.length === 0">
-            <td :colspan="products.length + 1" class="empty">表示できる売店がありません</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
+    <div class="header"><h3>{{ title }}</h3><button v-if="canDelete" class="clear" @click="clearData">クリア</button></div>
+    <div v-if="canEditStructure" class="toolbar"><button @click="addRow">＋行追加</button><button @click="addColumn">＋列追加</button></div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th class="booth-head">売店 <button class="lock" :disabled="!canManageLocks" @click="toggleLock">{{ boothLocked ? '🔒' : '🔓' }}</button></th>
+        <th v-for="column in sortedColumns" :key="column.id">
+          <input v-model="column.title" :disabled="!canEditStructure" @input="scheduleColumn(column)" @blur="saveColumn(column)" @compositionstart="composing.add(`column:${column.id}`)" @compositionend="composing.delete(`column:${column.id}`);scheduleColumn(column)" />
+          <button v-if="canDelete" class="small-delete" @click="remove('md-columns', column.id, '列')">×</button>
+        </th><th v-if="canDelete"></th>
+      </tr></thead>
+      <tbody><tr v-for="row in sortedRows" :key="row.id">
+        <td class="booth-cell">
+          <button class="booth" :disabled="boothLocked || !canSelectBooth" @click="popupRowId = popupRowId === row.id ? null : row.id">{{ displayBooth(row) }} ▾</button>
+          <div v-if="popupRowId === row.id" class="booth-popup">
+            <button v-for="booth in boothGroups[floorGroup]" :key="booth" :disabled="!canEditBooth(booth)" @click="selectBooth(row, booth)">{{ booth }}</button>
+            <div v-if="row.booth === 'その他'" class="custom"><input v-model="row.custom_booth" placeholder="売店名" @input="scheduleCustomBooth(row)" @blur="saveCustomBooth(row)" @compositionstart="composing.add(`row:${row.id}`)" @compositionend="composing.delete(`row:${row.id}`);scheduleCustomBooth(row)" /><button @click="popupRowId = null">決定</button></div>
+          </div>
+        </td>
+        <td v-for="column in sortedColumns" :key="column.id">
+          <input v-model="values[key(row.id,column.id)]" inputmode="numeric" :disabled="!rowEditable(row)" @input="scheduleCell(row.id,column.id)" @blur="saveCell(row.id,column.id)" @compositionstart="composing.add(key(row.id,column.id))" @compositionend="composing.delete(key(row.id,column.id));scheduleCell(row.id,column.id)" />
+        </td>
+        <td v-if="canDelete"><button class="small-delete" @click="remove('md-rows', row.id, '行')">削除</button></td>
+      </tr></tbody>
+    </table></div>
   </div>
 </template>
 
 <style scoped>
-.md-table {
-  min-width: 0;
-}
-
-.table-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-
-.table-heading h3 {
-  margin: 0;
-}
-
-.table-heading span {
-  color: #64748b;
-  font-size: 12px;
-}
-
-.table-container {
-  overflow-x: auto;
-  border: 1px solid #dbe4ee;
-  border-radius: 12px;
-}
-
-table {
-  width: 100%;
-  min-width: 720px;
-  border-collapse: collapse;
-  background: #fff;
-}
-
-th,
-td {
-  border-right: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
-  padding: 10px;
-  text-align: center;
-}
-
-tr:last-child th,
-tr:last-child td {
-  border-bottom: 0;
-}
-
-th:last-child,
-td:last-child {
-  border-right: 0;
-}
-
-thead th {
-  background: #f1f5f9;
-  color: #334155;
-  font-size: 13px;
-}
-
-thead small {
-  display: block;
-  margin-top: 3px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.store-column,
-.store-name {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  min-width: 150px;
-}
-
-.store-name {
-  background: #f8fafc;
-  text-align: left;
-}
-
-.cell-editor {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  min-width: 110px;
-}
-
-input {
-  width: 88px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  padding: 8px;
-  text-align: right;
-  font: inherit;
-}
-
-input:focus {
-  border-color: #2563eb;
-  outline: 3px solid rgba(37, 99, 235, 0.12);
-}
-
-input:disabled {
-  background: #f1f5f9;
-  color: #64748b;
-}
-
-.save-state {
-  min-height: 16px;
-  color: #64748b;
-  font-size: 10px;
-}
-
-.save-state.saved {
-  color: #15803d;
-}
-
-.save-state.error {
-  color: #dc2626;
-  font-weight: 700;
-}
-
-.empty {
-  color: #64748b;
-  text-align: center;
-}
+.md-table{position:relative}.header,.toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px}.header h3{font-size:21px}.toolbar{justify-content:flex-start;margin-bottom:12px}.toolbar button{border:0;border-radius:8px;background:#2563eb;color:#fff;padding:9px 14px;font-weight:700}.clear,.small-delete{border:0;border-radius:7px;background:#fee2e2;color:#b91c1c;padding:8px}.table-wrap{overflow:auto}table{width:100%;min-width:700px;border-collapse:collapse}th,td{position:relative;border:1px solid #dbe4ee;padding:8px;text-align:center}th{background:#f8fafc}th input,td>input{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px}.booth-head,.booth-cell{min-width:190px}.booth{width:100%;border:0;border-radius:7px;background:#e0f2fe;padding:9px;font-weight:700}.lock{border:0;background:transparent}.booth-popup{position:absolute;top:48px;left:8px;z-index:50;display:grid;width:220px;padding:8px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;box-shadow:0 12px 28px #0f172a26}.booth-popup>button{border:0;background:white;padding:9px;text-align:left}.custom{display:flex;gap:5px}.custom input{min-width:0}.small-delete{margin-top:5px}button:disabled,input:disabled{opacity:.55;cursor:not-allowed}
 </style>

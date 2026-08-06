@@ -14,6 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => Boolean(user.value))
   const canManage = computed(() => role.value === 'admin')
+  const canManageLocks = computed(() => role.value === 'admin' || role.value === 'leader')
   const canEditReports = computed(() => ['admin', 'leader', 'sub_leader'].includes(role.value || ''))
 
   function reset() {
@@ -33,13 +34,13 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function canViewStore(storeId: number) {
-    return role.value === 'admin' || storeAssignments.value.some(
+    return role.value === 'admin' || role.value === 'leader' || storeAssignments.value.some(
       (assignment) => assignment.store_id === storeId && assignment.can_view,
     )
   }
 
   function canEditStore(storeId: number) {
-    return role.value === 'admin' || (
+    return role.value === 'admin' || role.value === 'leader' || (
       canEditReports.value && storeAssignments.value.some(
         (assignment) => assignment.store_id === storeId && assignment.can_edit,
       )
@@ -92,6 +93,7 @@ export const useAuthStore = defineStore('auth', () => {
     storeAssignments,
     isAuthenticated,
     canManage,
+    canManageLocks,
     canEditReports,
     canViewStore,
     canEditStore,

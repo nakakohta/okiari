@@ -1,489 +1,200 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, watch } from 'vue'
-import { reportService } from '@/lib/services'
-import type { Product, RestockReport, RestockStatus, Store } from '@/lib/types'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { boardService } from '@/lib/services'
+import type { DTableLock, DTableRow } from '@/lib/types'
 
-type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
-type RestockPatch = { quantity?: number; status?: RestockStatus; note?: string | null }
-
-const props = withDefaults(
-  defineProps<{
-    title?: string
-    store: Store
-    products: Product[]
-    reports: RestockReport[]
-    readonly?: boolean
-  }>(),
-  {
-    title: 'ドリンク補充',
-    readonly: false,
-  },
-)
-
-const emit = defineEmits<{
-  saved: [report: RestockReport]
-  error: [message: string]
+const props = defineProps<{
+  title: string
+  storeId: number
+  scope: 'drink' | 'consumable'
+  rows: DTableRow[]
+  locks: DTableLock[]
+  readonly: boolean
+  canManageLocks: boolean
+  canDelete: boolean
 }>()
+const emit = defineEmits<{ refresh: []; error: [message: string] }>()
 
-const statusLabels: Record<RestockStatus, string> = {
-  requested: '未補充',
-  working: '対応中',
-  completed: '完了',
-  cancelled: '在庫なし・取消',
-}
-
+type EditableField = 'item_name' | 'max_quantity' | 'requested_quantity' | 'note'
+type Column = 'status' | 'name' | 'max_quantity' | 'requested_quantity' | 'note'
+const localRows = ref<DTableRow[]>([])
 const prepareMode = ref(false)
-const rowValues = reactive<
-  Record<number, { quantity: string; note: string; status: RestockStatus }>
->({})
-const rowStates = reactive<Record<number, SaveState>>({})
-const dirtyRows = new Set<number>()
-const updateTimers = new Map<number, ReturnType<typeof setTimeout>>()
-const pendingUpdates = new Map<number, RestockPatch>()
-const updateVersions = new Map<number, number>()
+const selected = ref<DTableRow | null>(null)
+const modeMessage = ref('')
+const pending = new Set<string>()
+const timers = new Map<string, ReturnType<typeof setTimeout>>()
+const composing = new Set<string>()
 
-const draftProductId = ref<number | ''>('')
-const draftQuantity = ref('')
-const draftNote = ref('')
-const draftState = ref<SaveState>('idle')
-let draftTimer: ReturnType<typeof setTimeout> | null = null
+const visibleRows = computed(() => prepareMode.value
+  ? localRows.value.filter((row) => row.status !== 'completed')
+  : localRows.value)
 
-const filteredReports = computed(() => {
-  if (!prepareMode.value) return props.reports
-  return props.reports.filter((report) => {
-    const status = rowValues[report.id]?.status ?? report.status
-    return status === 'requested' || status === 'working'
+watch(() => props.rows, (rows) => {
+  localRows.value = rows.map((incoming) => {
+    const current = localRows.value.find((row) => row.id === incoming.id)
+    if (!current) return { ...incoming }
+    const merged = { ...incoming }
+    for (const field of ['item_name', 'max_quantity', 'requested_quantity', 'note'] as EditableField[]) {
+      if (pending.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
+    }
+    return merged
   })
-})
+}, { immediate: true, deep: true })
 
-watch(
-  () => props.reports,
-  (reports) => {
-    for (const report of reports) {
-      if (dirtyRows.has(report.id)) continue
-      rowValues[report.id] = {
-        quantity: String(report.quantity),
-        note: report.note ?? '',
-        status: report.status,
-      }
-      if (!rowStates[report.id] || rowStates[report.id] === 'saved') rowStates[report.id] = 'idle'
-    }
-  },
-  { immediate: true, deep: true },
-)
+function locked(column: Column) {
+  return props.locks.some((lock) => lock.column_key === column && lock.is_locked)
+}
 
-function queueUpdate(report: RestockReport, patch: RestockPatch, immediate = false) {
-  if (props.readonly) return
-  dirtyRows.add(report.id)
-  updateVersions.set(report.id, (updateVersions.get(report.id) ?? 0) + 1)
-  pendingUpdates.set(report.id, { ...pendingUpdates.get(report.id), ...patch })
-  rowStates[report.id] = immediate ? 'saving' : 'pending'
+function editable(column: Column) {
+  return !props.readonly && !locked(column)
+}
 
-  const previousTimer = updateTimers.get(report.id)
-  if (previousTimer) clearTimeout(previousTimer)
-  if (immediate) {
-    updateTimers.delete(report.id)
-    void saveUpdate(report.id)
-    return
+function flash(message: string) {
+  modeMessage.value = message
+  setTimeout(() => { modeMessage.value = '' }, 2600)
+}
+
+function togglePrepareMode() {
+  prepareMode.value = !prepareMode.value
+  flash(prepareMode.value
+    ? '売店準備モードです。未補充の行だけを表示します。'
+    : '興行日モードに戻りました。')
+}
+
+async function save(row: DTableRow, field: EditableField) {
+  const key = `${row.id}:${field}`
+  const scheduled = timers.get(key)
+  if (scheduled) clearTimeout(scheduled)
+  timers.delete(key)
+  try {
+    if (field === 'max_quantity' || field === 'requested_quantity') row[field] = Math.max(0, Number(row[field]) || 0)
+    await boardService.update('drink-refill', 'd-rows', row.id, { [field]: row[field] })
+    pending.delete(key)
+    emit('refresh')
+  } catch {
+    emit('error', '入力内容を保存できませんでした。接続復旧後にもう一度入力してください。')
+    timers.set(key, setTimeout(() => void save(row, field), 2000))
   }
-  updateTimers.set(
-    report.id,
-    setTimeout(() => {
-      updateTimers.delete(report.id)
-      void saveUpdate(report.id)
-    }, 450),
-  )
 }
 
-function updateQuantity(report: RestockReport, event: Event) {
-  const value = (event.target as HTMLInputElement).value
-  const row = rowValues[report.id]
-  if (!row) return
-  row.quantity = value
-  const quantity = Number(value)
-  if (!Number.isInteger(quantity) || quantity <= 0) {
-    rowStates[report.id] = 'error'
-    return
+function schedule(row: DTableRow, field: EditableField) {
+  const key = `${row.id}:${field}`
+  if (composing.has(key)) return
+  pending.add(key)
+  const timer = timers.get(key)
+  if (timer) clearTimeout(timer)
+  timers.set(key, setTimeout(() => void save(row, field), 450))
+}
+
+function composition(row: DTableRow, field: EditableField, active: boolean) {
+  const key = `${row.id}:${field}`
+  if (active) composing.add(key)
+  else {
+    composing.delete(key)
+    schedule(row, field)
   }
-  queueUpdate(report, { quantity })
 }
 
-function updateNote(report: RestockReport, event: Event) {
-  const note = (event.target as HTMLInputElement).value
-  const row = rowValues[report.id]
-  if (!row) return
-  row.note = note
-  if ((event as InputEvent).isComposing) return
-  queueUpdate(report, { note: note || null })
-}
-
-function updateStatus(report: RestockReport, event: Event) {
-  const status = (event.target as HTMLSelectElement).value as RestockStatus
-  const row = rowValues[report.id]
-  if (!row) return
+async function setStatus(status: DTableRow['status']) {
+  if (!selected.value) return
+  const row = selected.value
   row.status = status
-  queueUpdate(report, { status }, true)
-}
-
-async function saveUpdate(reportId: number) {
-  const patch = pendingUpdates.get(reportId)
-  if (!patch || props.readonly) return
-  const savingVersion = updateVersions.get(reportId) ?? 0
-  pendingUpdates.delete(reportId)
-  rowStates[reportId] = 'saving'
+  selected.value = null
   try {
-    const saved = await reportService.updateDrinkRefill(reportId, patch)
-    if ((updateVersions.get(reportId) ?? 0) === savingVersion && !pendingUpdates.has(reportId)) {
-      dirtyRows.delete(reportId)
-      rowValues[reportId] = {
-        quantity: String(saved.quantity),
-        note: saved.note ?? '',
-        status: saved.status,
-      }
-      rowStates[reportId] = 'saved'
-    } else {
-      rowStates[reportId] = 'pending'
-    }
-    emit('saved', saved)
-  } catch {
-    pendingUpdates.set(reportId, { ...patch, ...pendingUpdates.get(reportId) })
-    if ((updateVersions.get(reportId) ?? 0) === savingVersion) {
-      rowStates[reportId] = 'error'
-      emit('error', '補充依頼を自動保存できませんでした。入力内容は画面に残っています。')
-    }
-  }
+    await boardService.update('drink-refill', 'd-rows', row.id, { status })
+    emit('refresh')
+  } catch { emit('error', '補充状況を保存できませんでした。') }
 }
 
-function scheduleDraftSave(event?: Event) {
-  if (props.readonly) return
-  if (event && (event as InputEvent).isComposing) return
-  if (draftTimer) clearTimeout(draftTimer)
-  if (draftProductId.value === '' || draftQuantity.value === '') {
-    draftState.value = 'idle'
-    return
-  }
-  draftState.value = 'pending'
-  draftTimer = setTimeout(() => {
-    draftTimer = null
-    void saveDraft()
-  }, 650)
-}
-
-async function saveDraft() {
-  if (draftProductId.value === '' || props.readonly) return
-  const quantity = Number(draftQuantity.value)
-  if (!Number.isInteger(quantity) || quantity <= 0) {
-    draftState.value = 'error'
-    emit('error', '補充数には1以上の整数を入力してください')
-    return
-  }
-
-  draftState.value = 'saving'
+async function addRow() {
   try {
-    const saved = await reportService.createDrinkRefill({
-      store_id: props.store.id,
-      product_id: Number(draftProductId.value),
-      quantity,
-      note: draftNote.value || null,
+    await boardService.create('drink-refill', 'd-rows', {
+      store_id: props.storeId, scope: props.scope, item_name: '', max_quantity: 0,
+      requested_quantity: 0, note: '', status: 'pending', sort_order: localRows.value.length,
     })
-    draftProductId.value = ''
-    draftQuantity.value = ''
-    draftNote.value = ''
-    draftState.value = 'saved'
-    emit('saved', saved)
-  } catch {
-    draftState.value = 'error'
-    emit('error', '新しい補充依頼を自動保存できませんでした')
-  }
+    emit('refresh')
+  } catch { emit('error', '行を追加できませんでした。') }
 }
 
-function stateLabel(state: SaveState | undefined) {
-  if (state === 'pending') return '保存待ち'
-  if (state === 'saving') return '保存中…'
-  if (state === 'saved') return '保存済み'
-  if (state === 'error') return '保存失敗'
-  return ''
+async function removeRow(row: DTableRow) {
+  if (!confirm('この行を削除しますか？')) return
+  try { await boardService.remove('drink-refill', 'd-rows', row.id); emit('refresh') }
+  catch { emit('error', '行を削除できませんでした。') }
 }
 
-onUnmounted(() => {
-  if (draftTimer) {
-    clearTimeout(draftTimer)
-    void saveDraft()
-  }
-  for (const [reportId, timer] of updateTimers) {
+async function toggleLock(column: Column) {
+  if (!props.canManageLocks) return
+  try {
+    await boardService.lock('drink-refill', {
+      store_id: props.storeId, scope: props.scope, column_key: column, is_locked: !locked(column),
+    })
+    emit('refresh')
+  } catch { emit('error', '列のロックを変更できませんでした。') }
+}
+
+async function clearData() {
+  if (!confirm('補充状況・取ってくる数・備考をクリアしますか？')) return
+  try { await boardService.clear('drink-refill', { store_id: props.storeId, scope: props.scope }); prepareMode.value = false; emit('refresh') }
+  catch { emit('error', '表をクリアできませんでした。') }
+}
+
+function flush() {
+  for (const [key, timer] of timers) {
     clearTimeout(timer)
-    void saveUpdate(reportId)
+    const [idText, field] = key.split(':') as [string, EditableField]
+    const row = localRows.value.find((item) => item.id === Number(idText))
+    if (row) void save(row, field)
   }
-  updateTimers.clear()
-})
+}
+onBeforeUnmount(flush)
 </script>
 
 <template>
   <div class="d-table">
+    <div v-if="modeMessage" class="popup">{{ modeMessage }}</div>
     <div class="header">
-      <div>
-        <h3>{{ title }}</h3>
-        <p>商品と補充数を入力すると自動保存されます</p>
+      <h3>{{ title }}</h3>
+      <div class="actions">
+        <button class="prepare" :class="{ active: prepareMode }" @click="togglePrepareMode">
+          {{ prepareMode ? '売店準備' : '興行日' }}
+        </button>
+        <button v-if="canDelete" class="clear" @click="clearData">クリア</button>
       </div>
-      <button class="prepare-btn" :class="{ active: prepareMode }" @click="prepareMode = !prepareMode">
-        {{ prepareMode ? '未完了のみ' : '全件表示' }}
-      </button>
     </div>
-
-    <div class="table-container">
+    <div class="toolbar"><button :disabled="readonly" @click="addRow">＋行追加</button></div>
+    <div class="table-wrap">
       <table>
-        <thead>
-          <tr>
-            <th>補充状況</th>
-            <th>商品名</th>
-            <th>補充数</th>
-            <th>備考</th>
-            <th>同期</th>
-          </tr>
-        </thead>
+        <thead><tr>
+          <th v-for="column in ([['status','補充状況'],['name','商品名'],['max_quantity','売店内MAX'],['requested_quantity','取ってくる数'],['note','備考']] as const)" :key="column[0]">
+            {{ column[1] }}
+            <button class="lock" :disabled="!canManageLocks" @click="toggleLock(column[0])">{{ locked(column[0]) ? '🔒' : '🔓' }}</button>
+          </th><th v-if="canDelete"></th>
+        </tr></thead>
         <tbody>
-          <tr v-for="report in filteredReports" :key="report.id">
-            <td>
-              <select
-                :value="rowValues[report.id]?.status ?? report.status"
-                :disabled="readonly"
-                :class="rowValues[report.id]?.status ?? report.status"
-                @change="updateStatus(report, $event)"
-              >
-                <option v-for="(label, status) in statusLabels" :key="status" :value="status">
-                  {{ label }}
-                </option>
-              </select>
-            </td>
-            <td>{{ report.product?.name ?? '不明な商品' }}</td>
-            <td>
-              <div class="quantity-field">
-                <input
-                  :value="rowValues[report.id]?.quantity ?? String(report.quantity)"
-                  type="number"
-                  min="1"
-                  step="1"
-                  :disabled="readonly"
-                  @input="updateQuantity(report, $event)"
-                />
-                <span>{{ report.product?.unit ?? '' }}</span>
-              </div>
-            </td>
-            <td>
-              <input
-                :value="rowValues[report.id]?.note ?? report.note ?? ''"
-                type="text"
-                :disabled="readonly"
-                placeholder="任意"
-                @input="updateNote(report, $event)"
-              />
-            </td>
-            <td>
-              <span class="save-state" :class="rowStates[report.id]">
-                {{ stateLabel(rowStates[report.id]) }}
-              </span>
-            </td>
-          </tr>
-
-          <tr v-if="!readonly" class="draft-row">
-            <td><span class="new-badge">新規</span></td>
-            <td>
-              <select
-                v-model.number="draftProductId"
-                :disabled="draftState === 'saving'"
-                @change="scheduleDraftSave"
-              >
-                <option value="" disabled>商品を選択</option>
-                <option v-for="product in products" :key="product.id" :value="product.id">
-                  {{ product.name }}
-                </option>
-              </select>
-            </td>
-            <td>
-              <input
-                v-model="draftQuantity"
-                type="number"
-                min="1"
-                step="1"
-                placeholder="補充数"
-                :disabled="draftState === 'saving'"
-                @input="scheduleDraftSave"
-              />
-            </td>
-            <td>
-              <input
-                v-model="draftNote"
-                type="text"
-                placeholder="任意"
-                :disabled="draftState === 'saving'"
-                @input="scheduleDraftSave"
-              />
-            </td>
-            <td>
-              <span class="save-state" :class="draftState">{{ stateLabel(draftState) }}</span>
-            </td>
-          </tr>
-
-          <tr v-if="filteredReports.length === 0 && readonly">
-            <td colspan="5" class="empty">補充依頼はありません</td>
+          <tr v-for="row in visibleRows" :key="row.id">
+            <td><button class="status" :class="row.status" :disabled="!editable('status')" @click="selected = row">
+              {{ row.status === 'pending' ? '未補充' : row.status === 'out_of_stock' ? '在庫無い為未補充' : '完了' }}
+            </button></td>
+            <td><input v-model="row.item_name" :disabled="!editable('name')" @input="schedule(row,'item_name')" @blur="save(row,'item_name')" @compositionstart="composition(row,'item_name',true)" @compositionend="composition(row,'item_name',false)" /></td>
+            <td><input v-model.number="row.max_quantity" type="number" min="0" :disabled="!editable('max_quantity')" @input="schedule(row,'max_quantity')" @blur="save(row,'max_quantity')" /></td>
+            <td><input v-model.number="row.requested_quantity" type="number" min="0" :disabled="!editable('requested_quantity')" @input="schedule(row,'requested_quantity')" @blur="save(row,'requested_quantity')" /></td>
+            <td><input v-model="row.note" :disabled="!editable('note')" @input="schedule(row,'note')" @blur="save(row,'note')" @compositionstart="composition(row,'note',true)" @compositionend="composition(row,'note',false)" /></td>
+            <td v-if="canDelete"><button class="delete" @click="removeRow(row)">削除</button></td>
           </tr>
         </tbody>
       </table>
+    </div>
+    <div v-if="selected" class="modal-backdrop" @click.self="selected = null">
+      <div class="modal"><h4>補充状況を選択</h4>
+        <button @click="setStatus('pending')">未補充</button>
+        <button @click="setStatus('out_of_stock')">在庫無い為未補充</button>
+        <button @click="setStatus('completed')">完了</button>
+        <button class="cancel" @click="selected = null">キャンセル</button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.d-table {
-  margin-bottom: 34px;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-
-.header h3,
-.header p {
-  margin: 0;
-}
-
-.header p {
-  margin-top: 4px;
-  color: #64748b;
-  font-size: 12px;
-}
-
-.prepare-btn {
-  border: 0;
-  border-radius: 8px;
-  background: #e2e8f0;
-  color: #334155;
-  padding: 9px 14px;
-  cursor: pointer;
-  font-weight: 700;
-}
-
-.prepare-btn.active {
-  background: #2563eb;
-  color: white;
-}
-
-.table-container {
-  overflow-x: auto;
-  border: 1px solid #dbe4ee;
-  border-radius: 12px;
-}
-
-table {
-  width: 100%;
-  min-width: 760px;
-  border-collapse: collapse;
-  background: white;
-}
-
-th,
-td {
-  padding: 10px;
-  border-right: 1px solid #e2e8f0;
-  border-bottom: 1px solid #e2e8f0;
-  text-align: left;
-}
-
-th:last-child,
-td:last-child {
-  border-right: 0;
-}
-
-tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-th {
-  background: #f1f5f9;
-  color: #334155;
-  font-size: 13px;
-}
-
-input,
-select {
-  width: 100%;
-  min-width: 110px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: white;
-  padding: 8px 10px;
-  font: inherit;
-}
-
-input:focus,
-select:focus {
-  border-color: #2563eb;
-  outline: 3px solid rgba(37, 99, 235, 0.12);
-}
-
-input:disabled,
-select:disabled {
-  background: #f1f5f9;
-  color: #64748b;
-}
-
-select.requested {
-  color: #dc2626;
-}
-
-select.working {
-  color: #b45309;
-}
-
-select.completed {
-  color: #15803d;
-}
-
-.quantity-field {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.quantity-field span {
-  color: #64748b;
-}
-
-.draft-row {
-  background: #eff6ff;
-}
-
-.new-badge {
-  display: inline-block;
-  border-radius: 999px;
-  background: #dbeafe;
-  color: #1d4ed8;
-  padding: 4px 9px;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.save-state {
-  color: #64748b;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.save-state.saved {
-  color: #15803d;
-}
-
-.save-state.error {
-  color: #dc2626;
-  font-weight: 700;
-}
-
-.empty {
-  color: #64748b;
-  text-align: center;
-}
+.d-table{position:relative;margin-bottom:28px}.header,.actions,.toolbar{display:flex;align-items:center}.header{justify-content:space-between;gap:16px}.header h3{font-size:20px}.actions{gap:8px}.toolbar{margin:10px 0}.toolbar button,.prepare,.clear{border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}.toolbar button{background:#2563eb;color:#fff}.prepare{background:#e2e8f0}.prepare.active{background:#f59e0b;color:#fff}.clear,.delete{background:#fee2e2;color:#b91c1c}.table-wrap{overflow:auto}table{width:100%;min-width:850px;border-collapse:collapse}th,td{border:1px solid #dbe4ee;padding:8px;text-align:center}th{background:#f8fafc}.lock{border:0;background:transparent;cursor:pointer}input{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px}.status{width:100%;border:0;border-radius:18px;padding:8px;font-weight:700;cursor:pointer}.status.pending{background:#fef3c7;color:#92400e}.status.out_of_stock{background:#fee2e2;color:#b91c1c}.status.completed{background:#dcfce7;color:#166534}.delete{border:0;border-radius:6px;padding:7px}.popup{position:fixed;top:24px;left:50%;z-index:1000;transform:translateX(-50%);background:#172033;color:white;padding:12px 20px;border-radius:8px}.modal-backdrop{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;background:#0007}.modal{display:grid;gap:10px;width:min(360px,90vw);padding:24px;border-radius:14px;background:white}.modal button{padding:12px;border:0;border-radius:8px}.cancel{background:#e2e8f0}button:disabled,input:disabled{cursor:not-allowed;opacity:.55}
 </style>
