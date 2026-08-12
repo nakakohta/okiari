@@ -38,6 +38,8 @@ export interface Store {
   name: string
   store_type: string
   is_active: boolean
+  drink_refill_visible: boolean
+  drink_refill_sort_order: number | null
   created_at?: string | null
   updated_at?: string | null
 }

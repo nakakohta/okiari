@@ -6,7 +6,10 @@ from app.supabase_client import supabase
 
 router = APIRouter(tags=["masters"])
 
-STORE_SELECT = "id,name,store_type,is_active,created_at,updated_at"
+STORE_SELECT = (
+    "id,name,store_type,is_active,drink_refill_visible,"
+    "drink_refill_sort_order,created_at,updated_at"
+)
 PRODUCT_SELECT = "id,name,category,unit,is_active,created_at,updated_at"
 
 

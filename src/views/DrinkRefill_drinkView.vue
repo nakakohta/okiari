@@ -14,7 +14,12 @@ const stores = ref<Store[]>([])
 const data = ref<DrinkBoardData | null>(null)
 const loading = ref(false)
 const errorMessage = ref('')
-const activeStores = computed(() => stores.value.filter((store) => store.is_active && auth.canViewStore(store.id)))
+const activeStores = computed(() => stores.value
+  .filter((store) => store.is_active && store.drink_refill_visible && auth.canViewStore(store.id))
+  .sort((left, right) =>
+    (left.drink_refill_sort_order ?? Number.MAX_SAFE_INTEGER)
+    - (right.drink_refill_sort_order ?? Number.MAX_SAFE_INTEGER),
+  ))
 
 async function load(silent = false) {
   if (!silent) loading.value = true

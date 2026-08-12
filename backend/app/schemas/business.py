@@ -16,6 +16,8 @@ class StoreRead(BaseModel):
     name: str
     store_type: str
     is_active: bool
+    drink_refill_visible: bool = False
+    drink_refill_sort_order: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
