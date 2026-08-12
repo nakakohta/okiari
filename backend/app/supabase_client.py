@@ -39,12 +39,13 @@ class ThreadLocalSupabaseClient:
 
 supabase = ThreadLocalSupabaseClient(supabase_url, service_role_key)
 
-# JWT verification is CPU-only after the first JWKS fetch. A single verifier keeps
-# that JWKS cache process-wide and the short lock prevents a cold-start stampede.
+# Keep authentication verification serialized on the shared sync client.  Using
+# Auth's user endpoint avoids rejecting otherwise-valid tokens when signing keys
+# are rotated or a local JWKS cache is temporarily stale.
 _auth_verifier = create_client(supabase_url, service_role_key)
 _auth_verifier_lock = RLock()
 
 
 def verify_access_token(access_token: str):
     with _auth_verifier_lock:
-        return _auth_verifier.auth.get_claims(access_token)
+        return _auth_verifier.auth.get_user(access_token)

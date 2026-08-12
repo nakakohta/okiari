@@ -42,9 +42,11 @@ api.interceptors.response.use(
         config.headers.Authorization = `Bearer ${data.session.access_token}`
         return api.request(config)
       }
+    }
 
-      const { data: current } = await supabase.auth.getSession()
-      if (!current.session) window.location.assign('/login')
+    if (error.response?.status === 401) {
+      await supabase.auth.signOut({ scope: 'local' })
+      if (window.location.pathname !== '/login') window.location.assign('/login')
     }
 
     return Promise.reject(error)

@@ -21,8 +21,10 @@ class AuthVerificationTests(unittest.TestCase):
 
     @patch("app.core.auth.get_user_profile")
     @patch("app.core.auth.verify_access_token")
-    def test_verified_claims_and_profile_are_cached(self, get_claims, get_profile) -> None:
-        get_claims.return_value = SimpleNamespace(claims={"sub": self.profile["id"]})
+    def test_verified_user_and_profile_are_cached(self, verify_token, get_profile) -> None:
+        verify_token.return_value = SimpleNamespace(
+            user=SimpleNamespace(id=self.profile["id"])
+        )
         get_profile.return_value = self.profile
 
         first = get_current_user(self.credentials)
@@ -30,7 +32,7 @@ class AuthVerificationTests(unittest.TestCase):
 
         self.assertEqual(first.auth_user_id, self.profile["id"])
         self.assertEqual(second.role_code, "admin")
-        self.assertEqual(get_claims.call_count, 2)
+        self.assertEqual(verify_token.call_count, 2)
         self.assertEqual(get_profile.call_count, 1)
 
     @patch("app.core.auth.verify_access_token")

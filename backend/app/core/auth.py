@@ -59,7 +59,7 @@ def get_current_user(
         raise unauthorized()
 
     try:
-        claims_response = verify_access_token(credentials.credentials)
+        auth_response = verify_access_token(credentials.credentials)
     except AuthInvalidJwtError as exc:
         raise unauthorized() from exc
     except AuthApiError as exc:
@@ -80,8 +80,8 @@ def get_current_user(
             detail="Authentication verification failed temporarily",
         ) from exc
 
-    claims = getattr(claims_response, "claims", None) or {}
-    auth_user_id = claims.get("sub")
+    auth_user = getattr(auth_response, "user", None)
+    auth_user_id = getattr(auth_user, "id", None)
     if not auth_user_id:
         raise unauthorized()
 
