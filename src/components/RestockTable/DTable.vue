@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import {
+  createAutosaveQueue,
+  normalizePostgresInteger,
+  POSTGRES_INTEGER_MAX,
+} from '@/lib/autosave'
 import type { DTableLock, DTableRow } from '@/lib/types'
 
 const props = defineProps<{
@@ -21,8 +26,7 @@ const localRows = ref<DTableRow[]>([])
 const prepareMode = ref(false)
 const selected = ref<DTableRow | null>(null)
 const modeMessage = ref('')
-const pending = new Set<string>()
-const timers = new Map<string, ReturnType<typeof setTimeout>>()
+const autosave = createAutosaveQueue()
 const composing = new Set<string>()
 
 const visibleRows = computed(() => prepareMode.value
@@ -35,7 +39,7 @@ watch(() => props.rows, (rows) => {
     if (!current) return { ...incoming }
     const merged = { ...incoming }
     for (const field of ['item_name', 'max_quantity', 'requested_quantity', 'note'] as EditableField[]) {
-      if (pending.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
+      if (autosave.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
     }
     return merged
   })
@@ -61,28 +65,25 @@ function togglePrepareMode() {
     : '興行日モードに戻りました。')
 }
 
-async function save(row: DTableRow, field: EditableField) {
-  const key = `${row.id}:${field}`
-  const scheduled = timers.get(key)
-  if (scheduled) clearTimeout(scheduled)
-  timers.delete(key)
-  try {
-    if (field === 'max_quantity' || field === 'requested_quantity') row[field] = Math.max(0, Number(row[field]) || 0)
-    await boardService.update('drink-refill', 'd-rows', row.id, { [field]: row[field] })
-    pending.delete(key)
-  } catch {
-    emit('error', '入力内容を保存できませんでした。接続復旧後にもう一度入力してください。')
-    timers.set(key, setTimeout(() => void save(row, field), 2000))
-  }
-}
-
 function schedule(row: DTableRow, field: EditableField) {
   const key = `${row.id}:${field}`
   if (composing.has(key)) return
-  pending.add(key)
-  const timer = timers.get(key)
-  if (timer) clearTimeout(timer)
-  timers.set(key, setTimeout(() => void save(row, field), 450))
+  autosave.schedule(key, async () => {
+    if (field === 'max_quantity' || field === 'requested_quantity') {
+      row[field] = normalizePostgresInteger(row[field])
+    }
+    await boardService.update('drink-refill', 'd-rows', row.id, { [field]: row[field] })
+  }, {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、入力内容の保存を再試行します。'
+      : '入力内容を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+
+function save(row: DTableRow, field: EditableField) {
+  const key = `${row.id}:${field}`
+  if (!autosave.has(key)) schedule(row, field)
+  autosave.flush(key)
 }
 
 function composition(row: DTableRow, field: EditableField, active: boolean) {
@@ -116,6 +117,7 @@ async function addRow() {
 
 async function removeRow(row: DTableRow) {
   if (!confirm('この行を削除しますか？')) return
+  autosave.cancelMatching((key) => key.startsWith(`${row.id}:`))
   try { await boardService.remove('drink-refill', 'd-rows', row.id); emit('refresh') }
   catch { emit('error', '行を削除できませんでした。') }
 }
@@ -136,15 +138,10 @@ async function clearData() {
   catch { emit('error', '表をクリアできませんでした。') }
 }
 
-function flush() {
-  for (const [key, timer] of timers) {
-    clearTimeout(timer)
-    const [idText, field] = key.split(':') as [string, EditableField]
-    const row = localRows.value.find((item) => item.id === Number(idText))
-    if (row) void save(row, field)
-  }
-}
-onBeforeUnmount(flush)
+onBeforeUnmount(() => {
+  autosave.flushAll()
+  autosave.stop()
+})
 </script>
 
 <template>
@@ -174,8 +171,8 @@ onBeforeUnmount(flush)
               {{ row.status === 'pending' ? '未補充' : row.status === 'out_of_stock' ? '在庫無い為未補充' : '完了' }}
             </button></td>
             <td><input v-model="row.item_name" :disabled="!editable('name')" @input="schedule(row,'item_name')" @blur="save(row,'item_name')" @compositionstart="composition(row,'item_name',true)" @compositionend="composition(row,'item_name',false)" /></td>
-            <td><input v-model.number="row.max_quantity" type="number" min="0" :disabled="!editable('max_quantity')" @input="schedule(row,'max_quantity')" @blur="save(row,'max_quantity')" /></td>
-            <td><input v-model.number="row.requested_quantity" type="number" min="0" :disabled="!editable('requested_quantity')" @input="schedule(row,'requested_quantity')" @blur="save(row,'requested_quantity')" /></td>
+            <td><input v-model.number="row.max_quantity" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('max_quantity')" @input="schedule(row,'max_quantity')" @blur="save(row,'max_quantity')" /></td>
+            <td><input v-model.number="row.requested_quantity" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('requested_quantity')" @input="schedule(row,'requested_quantity')" @blur="save(row,'requested_quantity')" /></td>
             <td><input v-model="row.note" :disabled="!editable('note')" @input="schedule(row,'note')" @blur="save(row,'note')" @compositionstart="composition(row,'note',true)" @compositionend="composition(row,'note',false)" /></td>
             <td v-if="canDelete"><button class="delete" @click="removeRow(row)">削除</button></td>
           </tr>

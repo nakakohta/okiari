@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import {
+  createAutosaveQueue,
+  normalizePostgresInteger,
+  POSTGRES_INTEGER_MAX,
+} from '@/lib/autosave'
 import type { MTableRow, Product, Store } from '@/lib/types'
 
 const props = defineProps<{
@@ -14,8 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{ refresh: []; error: [message: string] }>()
 type Field = 'store_id' | 'product_id' | 'expected_quantity' | 'actual_quantity' | 'note'
 const localRows = ref<MTableRow[]>([])
-const timers = new Map<string, ReturnType<typeof setTimeout>>()
-const pending = new Set<string>()
+const autosave = createAutosaveQueue()
 const composing = new Set<string>()
 
 const sortedRows = computed(() => [...localRows.value].sort((a, b) => a.sort_order - b.sort_order))
@@ -25,7 +29,7 @@ watch(() => props.rows, (rows) => {
     if (!current) return { ...incoming }
     const merged = { ...incoming }
     for (const field of ['store_id','product_id','expected_quantity','actual_quantity','note'] as Field[]) {
-      if (pending.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
+      if (autosave.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
     }
     return merged
   })
@@ -35,25 +39,24 @@ function storeName(id: number) { return props.stores.find((store) => store.id ==
 function productName(id: number) { return props.products.find((product) => product.id === id)?.name ?? '-' }
 function unit(id: number) { return props.products.find((product) => product.id === id)?.unit ?? '' }
 
-async function save(row: MTableRow, field: Field) {
-  const timerKey = `${row.id}:${field}`
-  const scheduled = timers.get(timerKey)
-  if (scheduled) clearTimeout(scheduled)
-  timers.delete(timerKey)
-  if (field === 'expected_quantity' || field === 'actual_quantity') row[field] = Math.max(0, Number(row[field]) || 0)
-  try { await boardService.update('inventory', 'm-rows', row.id, { [field]: row[field] }); pending.delete(timerKey) }
-  catch {
-    emit('error', '棚卸内容を保存できませんでした。再接続後に自動で再試行します。')
-    timers.set(timerKey, setTimeout(() => void save(row, field), 2000))
-  }
-}
 function schedule(row: MTableRow, field: Field) {
   const timerKey = `${row.id}:${field}`
   if (composing.has(timerKey)) return
-  pending.add(timerKey)
-  const old = timers.get(timerKey)
-  if (old) clearTimeout(old)
-  timers.set(timerKey, setTimeout(() => void save(row, field), 450))
+  autosave.schedule(timerKey, async () => {
+    if (field === 'expected_quantity' || field === 'actual_quantity') {
+      row[field] = normalizePostgresInteger(row[field])
+    }
+    await boardService.update('inventory', 'm-rows', row.id, { [field]: row[field] })
+  }, {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、棚卸内容の保存を再試行します。'
+      : '棚卸内容を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+function save(row: MTableRow, field: Field) {
+  const timerKey = `${row.id}:${field}`
+  if (!autosave.has(timerKey)) schedule(row, field)
+  autosave.flush(timerKey)
 }
 async function addRow() {
   const store = props.stores.find((item) => item.is_active && props.canEditStore(item.id))
@@ -68,6 +71,7 @@ async function confirmRow(row: MTableRow) {
 }
 async function removeRow(row: MTableRow) {
   if (!confirm('この棚卸行を削除しますか？')) return
+  autosave.cancelMatching((key) => key.startsWith(`${row.id}:`))
   try { await boardService.remove('inventory', 'm-rows', row.id); emit('refresh') }
   catch { emit('error', '棚卸行を削除できませんでした。') }
 }
@@ -76,15 +80,10 @@ async function clearRows() {
   try { await boardService.clear('inventory'); emit('refresh') }
   catch { emit('error', '棚卸表をクリアできませんでした。') }
 }
-function flush() {
-  for (const [timerKey, timer] of timers) {
-    clearTimeout(timer)
-    const [idText, field] = timerKey.split(':') as [string, Field]
-    const row = localRows.value.find((item) => item.id === Number(idText))
-    if (row) void save(row, field)
-  }
-}
-onBeforeUnmount(flush)
+onBeforeUnmount(() => {
+  autosave.flushAll()
+  autosave.stop()
+})
 </script>
 
 <template>
@@ -95,8 +94,8 @@ onBeforeUnmount(flush)
       <tbody><tr v-for="row in sortedRows" :key="row.id" :class="{ confirmed: row.is_confirmed }">
         <td><select v-model="row.store_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'store_id')"><option v-for="store in stores.filter(item => item.is_active && canEditStore(item.id))" :key="store.id" :value="store.id">{{ store.name }}</option></select><span class="print">{{ storeName(row.store_id) }}</span></td>
         <td><select v-model="row.product_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'product_id')"><option v-for="product in products.filter(item => item.is_active)" :key="product.id" :value="product.id">{{ product.name }}</option></select><span class="print">{{ productName(row.product_id) }}</span></td>
-        <td><div class="quantity"><input v-model.number="row.expected_quantity" type="number" min="0" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'expected_quantity')" @blur="save(row,'expected_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
-        <td><div class="quantity"><input v-model.number="row.actual_quantity" type="number" min="0" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'actual_quantity')" @blur="save(row,'actual_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td><div class="quantity"><input v-model.number="row.expected_quantity" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'expected_quantity')" @blur="save(row,'expected_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td><div class="quantity"><input v-model.number="row.actual_quantity" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'actual_quantity')" @blur="save(row,'actual_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
         <td :class="{ negative: row.actual_quantity-row.expected_quantity < 0, positive: row.actual_quantity-row.expected_quantity > 0 }">{{ row.actual_quantity - row.expected_quantity }}</td>
         <td><button class="confirm" :class="{ active: row.is_confirmed }" :disabled="!canConfirm" @click="confirmRow(row)">{{ row.is_confirmed ? '確定済み' : '未確定' }}</button></td>
         <td><input v-model="row.note" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'note')" @blur="save(row,'note')" @compositionstart="composing.add(`${row.id}:note`)" @compositionend="composing.delete(`${row.id}:note`);schedule(row,'note')" /></td>

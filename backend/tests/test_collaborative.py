@@ -7,6 +7,7 @@ from app.core.auth import CurrentUser
 from app.routers.collaborative import (
     ClearPayload,
     LockPayload,
+    POSTGRES_INTEGER_MAX,
     _require_write,
     _validate_values,
     clear_board,
@@ -33,6 +34,23 @@ class CollaborativeValidationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as context:
             _validate_values("m-rows", {"actual_quantity": -1}, create=False)
         self.assertEqual(context.exception.status_code, 400)
+
+    def test_rejects_quantities_above_postgres_integer_range(self) -> None:
+        with self.assertRaises(HTTPException) as context:
+            _validate_values(
+                "d-rows",
+                {"requested_quantity": POSTGRES_INTEGER_MAX + 1},
+                create=False,
+            )
+        self.assertEqual(context.exception.status_code, 400)
+
+    def test_accepts_postgres_integer_upper_bound(self) -> None:
+        values = _validate_values(
+            "d-rows",
+            {"requested_quantity": POSTGRES_INTEGER_MAX},
+            create=False,
+        )
+        self.assertEqual(values["requested_quantity"], POSTGRES_INTEGER_MAX)
 
     def test_rejects_invalid_status(self) -> None:
         with self.assertRaises(HTTPException) as context:

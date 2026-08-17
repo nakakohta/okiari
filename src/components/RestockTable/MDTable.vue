@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import { createAutosaveQueue } from '@/lib/autosave'
 import type { MDTableCell, MDTableColumn, MDTableLock, MDTableRow } from '@/lib/types'
 
 const props = defineProps<{
@@ -22,10 +23,7 @@ const localRows = ref<MDTableRow[]>([])
 const localColumns = ref<MDTableColumn[]>([])
 const values = ref<Record<string, string>>({})
 const popupRowId = ref<number | null>(null)
-const timers = new Map<string, ReturnType<typeof setTimeout>>()
-const columnTimers = new Map<number, ReturnType<typeof setTimeout>>()
-const rowTimers = new Map<number, ReturnType<typeof setTimeout>>()
-const pending = new Set<string>()
+const autosave = createAutosaveQueue()
 const composing = new Set<string>()
 
 const boothGroups = {
@@ -41,47 +39,44 @@ const sortedColumns = computed(() => [...localColumns.value].sort((a, b) => a.so
 watch(() => props.rows, (rows) => {
   localRows.value = rows.map((incoming) => {
     const current = localRows.value.find((row) => row.id === incoming.id)
-    return current && rowTimers.has(incoming.id) ? { ...incoming, custom_booth: current.custom_booth } : { ...incoming }
+    return current && autosave.has(`row:${incoming.id}:custom_booth`) ? { ...incoming, custom_booth: current.custom_booth } : { ...incoming }
   })
 }, { immediate: true, deep: true })
 watch(() => props.columns, (columns) => {
   localColumns.value = columns.map((incoming) => {
     const current = localColumns.value.find((column) => column.id === incoming.id)
-    return current && columnTimers.has(incoming.id) ? { ...incoming, title: current.title } : { ...incoming }
+    return current && autosave.has(`column:${incoming.id}:title`) ? { ...incoming, title: current.title } : { ...incoming }
   })
 }, { immediate: true, deep: true })
 watch(() => props.cells, (cells) => {
   for (const cell of cells) {
-    const key = `${cell.row_id}:${cell.column_id}`
-    if (!pending.has(key)) values.value[key] = cell.value
+    const cellKey = key(cell.row_id, cell.column_id)
+    if (!autosave.has(cellKey)) values.value[cellKey] = cell.value
   }
 }, { immediate: true, deep: true })
 
-function key(rowId: number, columnId: number) { return `${rowId}:${columnId}` }
+function key(rowId: number, columnId: number) { return `cell:${rowId}:${columnId}` }
 function displayBooth(row: MDTableRow) { return row.booth === 'その他' ? row.custom_booth || 'その他' : row.booth || 'ブース' }
 function rowEditable(row: MDTableRow) { return props.canEditBooth(row.booth) }
-
-async function saveCell(rowId: number, columnId: number) {
-  const cellKey = key(rowId, columnId)
-  const scheduled = timers.get(cellKey)
-  if (scheduled) clearTimeout(scheduled)
-  timers.delete(cellKey)
-  const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
-  try {
-    if (existing) await boardService.update('meal-drink', 'md-cells', existing.id, { value: values.value[cellKey] ?? '' })
-    else await boardService.create('meal-drink', 'md-cells', { row_id: rowId, column_id: columnId, value: values.value[cellKey] ?? '' })
-    pending.delete(cellKey)
-  } catch { emit('error', '食数を保存できませんでした。') }
-  if (pending.has(cellKey) && !timers.has(cellKey)) timers.set(cellKey, setTimeout(() => void saveCell(rowId, columnId), 2000))
-}
 
 function scheduleCell(rowId: number, columnId: number) {
   const cellKey = key(rowId, columnId)
   if (composing.has(cellKey)) return
-  pending.add(cellKey)
-  const timer = timers.get(cellKey)
-  if (timer) clearTimeout(timer)
-  timers.set(cellKey, setTimeout(() => void saveCell(rowId, columnId), 450))
+  autosave.schedule(cellKey, async () => {
+    const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
+    if (existing) await boardService.update('meal-drink', 'md-cells', existing.id, { value: values.value[cellKey] ?? '' })
+    else await boardService.create('meal-drink', 'md-cells', { row_id: rowId, column_id: columnId, value: values.value[cellKey] ?? '' })
+  }, {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、食数の保存を再試行します。'
+      : '食数を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+
+function saveCell(rowId: number, columnId: number) {
+  const cellKey = key(rowId, columnId)
+  if (!autosave.has(cellKey)) scheduleCell(rowId, columnId)
+  autosave.flush(cellKey)
 }
 
 async function saveRow(row: MDTableRow, fields: Record<string, unknown>) {
@@ -89,21 +84,19 @@ async function saveRow(row: MDTableRow, fields: Record<string, unknown>) {
   catch { emit('error', '売店名を保存できませんでした。') }
 }
 
-async function saveCustomBooth(row: MDTableRow) {
-  const scheduled = rowTimers.get(row.id)
-  if (scheduled) clearTimeout(scheduled)
-  rowTimers.delete(row.id)
-  try { await boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }) }
-  catch {
-    emit('error', 'その他売店名を保存できませんでした。再接続後に自動で再試行します。')
-    rowTimers.set(row.id, setTimeout(() => void saveCustomBooth(row), 2000))
-  }
-}
 function scheduleCustomBooth(row: MDTableRow) {
+  const timerKey = `row:${row.id}:custom_booth`
   if (composing.has(`row:${row.id}`)) return
-  const old = rowTimers.get(row.id)
-  if (old) clearTimeout(old)
-  rowTimers.set(row.id, setTimeout(() => void saveCustomBooth(row), 450))
+  autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }), {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、その他売店名の保存を再試行します。'
+      : 'その他売店名を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+function saveCustomBooth(row: MDTableRow) {
+  const timerKey = `row:${row.id}:custom_booth`
+  if (!autosave.has(timerKey)) scheduleCustomBooth(row)
+  autosave.flush(timerKey)
 }
 
 function selectBooth(row: MDTableRow, booth: string) {
@@ -129,25 +122,28 @@ async function addColumn() {
   } catch { emit('error', '列を追加できませんでした。') }
 }
 
-async function saveColumn(column: MDTableColumn) {
-  const scheduled = columnTimers.get(column.id)
-  if (scheduled) clearTimeout(scheduled)
-  columnTimers.delete(column.id)
-  try { await boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }) }
-  catch {
-    emit('error', '列名を保存できませんでした。再接続後に自動で再試行します。')
-    columnTimers.set(column.id, setTimeout(() => void saveColumn(column), 2000))
-  }
-}
 function scheduleColumn(column: MDTableColumn) {
+  const timerKey = `column:${column.id}:title`
   if (composing.has(`column:${column.id}`)) return
-  const old = columnTimers.get(column.id)
-  if (old) clearTimeout(old)
-  columnTimers.set(column.id, setTimeout(() => void saveColumn(column), 450))
+  autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }), {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、列名の保存を再試行します。'
+      : '列名を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+function saveColumn(column: MDTableColumn) {
+  const timerKey = `column:${column.id}:title`
+  if (!autosave.has(timerKey)) scheduleColumn(column)
+  autosave.flush(timerKey)
 }
 
 async function remove(resource: 'md-rows' | 'md-columns', id: number, label: string) {
   if (!confirm(`この${label}を削除しますか？`)) return
+  if (resource === 'md-rows') {
+    autosave.cancelMatching((timerKey) => timerKey.startsWith(`row:${id}:`) || timerKey.startsWith(`cell:${id}:`))
+  } else {
+    autosave.cancelMatching((timerKey) => timerKey.startsWith(`column:${id}:`) || timerKey.endsWith(`:${id}`))
+  }
   try { await boardService.remove('meal-drink', resource, id); emit('refresh') }
   catch { emit('error', `${label}を削除できませんでした。`) }
 }
@@ -163,24 +159,10 @@ async function clearData() {
   catch { emit('error', '食数をクリアできませんでした。') }
 }
 
-function flush() {
-  for (const [cellKey, timer] of timers) {
-    clearTimeout(timer)
-    const [rowId, columnId] = cellKey.split(':').map(Number)
-    void saveCell(rowId!, columnId!)
-  }
-  for (const [columnId, timer] of columnTimers) {
-    clearTimeout(timer)
-    const column = localColumns.value.find((item) => item.id === columnId)
-    if (column) void saveColumn(column)
-  }
-  for (const [rowId, timer] of rowTimers) {
-    clearTimeout(timer)
-    const row = localRows.value.find((item) => item.id === rowId)
-    if (row) void saveCustomBooth(row)
-  }
-}
-onBeforeUnmount(flush)
+onBeforeUnmount(() => {
+  autosave.flushAll()
+  autosave.stop()
+})
 </script>
 
 <template>

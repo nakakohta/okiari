@@ -52,6 +52,7 @@ WRITE_FIELDS: dict[str, set[str]] = {
 }
 
 SOFT_DELETE_RESOURCES = {"d-rows", "md-rows", "md-columns", "mf-sections", "mf-rows", "mf-containers", "m-rows"}
+POSTGRES_INTEGER_MAX = 2_147_483_647
 IMMUTABLE_FIELDS = {
     "d-rows": {"store_id", "scope"},
     "md-rows": {"floor_group"},
@@ -190,8 +191,12 @@ def _validate_values(resource: str, values: dict[str, Any], *, create: bool) -> 
     if "container_type" in values and values["container_type"] not in {"insulated_box", "food_warmer", "register"}:
         raise bad_request("Invalid container type")
     for field in {"max_quantity", "requested_quantity", "quantity", "expected_quantity", "actual_quantity", "sort_order"} & set(values):
-        if isinstance(values[field], bool) or not isinstance(values[field], int) or values[field] < 0:
-            raise bad_request(f"{field} must be a non-negative integer")
+        if (
+            isinstance(values[field], bool)
+            or not isinstance(values[field], int)
+            or not 0 <= values[field] <= POSTGRES_INTEGER_MAX
+        ):
+            raise bad_request(f"{field} must be an integer between 0 and {POSTGRES_INTEGER_MAX}")
     return values
 
 

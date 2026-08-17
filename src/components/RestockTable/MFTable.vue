@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import {
+  createAutosaveQueue,
+  normalizePostgresInteger,
+  POSTGRES_INTEGER_MAX,
+} from '@/lib/autosave'
 import type { MFTableContainer, MFTableRow } from '@/lib/types'
 
 const props = defineProps<{
@@ -18,7 +23,7 @@ const localRows = ref<MFTableRow[]>([])
 const localContainers = ref<MFTableContainer[]>([])
 const openMenu = ref<number | null>(null)
 const draggedRow = ref<number | null>(null)
-const timers = new Map<string, ReturnType<typeof setTimeout>>()
+const autosave = createAutosaveQueue()
 const composing = new Set<string>()
 
 const sortedRows = computed(() => [...localRows.value].sort((a, b) => a.sort_order - b.sort_order))
@@ -30,7 +35,7 @@ watch(() => props.rows, (rows) => {
     if (!current) return { ...incoming }
     const merged = { ...incoming }
     for (const field of ['icon','item_name','subtext','note'] as RowField[]) {
-      if (timers.has(`mf-rows:${incoming.id}:${field}`)) merged[field] = current[field] as never
+      if (autosave.has(`mf-rows:${incoming.id}:${field}`)) merged[field] = current[field] as never
     }
     return merged
   })
@@ -41,31 +46,29 @@ watch(() => props.containers, (containers) => {
     if (!current) return { ...incoming }
     const merged = { ...incoming }
     for (const field of ['name','quantity'] as ContainerField[]) {
-      if (timers.has(`mf-containers:${incoming.id}:${field}`)) merged[field] = current[field] as never
+      if (autosave.has(`mf-containers:${incoming.id}:${field}`)) merged[field] = current[field] as never
     }
     return merged
   })
 }, { immediate: true, deep: true })
 
-async function save(resource: 'mf-rows' | 'mf-containers', id: number, field: RowField | ContainerField, value: unknown) {
-  const timerKey = `${resource}:${id}:${field}`
-  const scheduled = timers.get(timerKey)
-  if (scheduled) clearTimeout(scheduled)
-  timers.delete(timerKey)
-  const normalized = field === 'quantity' ? Math.max(0, Number(value) || 0) : value
-  try { await boardService.update('meal-food', resource, id, { [field]: normalized }) }
-  catch {
-    emit('error', '入力内容を保存できませんでした。再接続後に自動で再試行します。')
-    timers.set(timerKey, setTimeout(() => void save(resource, id, field, normalized), 2000))
-  }
-}
-
 function schedule(resource: 'mf-rows' | 'mf-containers', id: number, field: RowField | ContainerField, value: unknown) {
   const timerKey = `${resource}:${id}:${field}`
   if (composing.has(timerKey)) return
-  const old = timers.get(timerKey)
-  if (old) clearTimeout(old)
-  timers.set(timerKey, setTimeout(() => void save(resource, id, field, value), 450))
+  autosave.schedule(timerKey, async () => {
+    const normalized = field === 'quantity' ? normalizePostgresInteger(value) : value
+    await boardService.update('meal-food', resource, id, { [field]: normalized })
+  }, {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、入力内容の保存を再試行します。'
+      : '入力内容を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+
+function save(resource: 'mf-rows' | 'mf-containers', id: number, field: RowField | ContainerField, value: unknown) {
+  const timerKey = `${resource}:${id}:${field}`
+  if (!autosave.has(timerKey)) schedule(resource, id, field, value)
+  autosave.flush(timerKey)
 }
 
 async function addRow() {
@@ -84,6 +87,15 @@ async function addContainer(row: MFTableRow) {
 
 async function remove(resource: 'mf-rows' | 'mf-containers', id: number, label: string) {
   if (!confirm(`この${label}を削除しますか？`)) return
+  autosave.cancelMatching((timerKey) => timerKey.startsWith(`${resource}:${id}:`))
+  if (resource === 'mf-rows') {
+    const containerIds = new Set(containersFor(id).map((container) => container.id))
+    autosave.cancelMatching((timerKey) => {
+      if (!timerKey.startsWith('mf-containers:')) return false
+      const containerId = Number(timerKey.split(':')[1])
+      return containerIds.has(containerId)
+    })
+  }
   try { await boardService.remove('meal-food', resource, id); emit('refresh') }
   catch { emit('error', `${label}を削除できませんでした。`) }
 }
@@ -115,15 +127,10 @@ async function drop(index: number) {
   catch { emit('error', '品目の並び順を保存できませんでした。') }
 }
 
-function flush() {
-  for (const [timerKey, timer] of timers) {
-    clearTimeout(timer)
-    const [resource, idText, field] = timerKey.split(':') as ['mf-rows' | 'mf-containers', string, RowField | ContainerField]
-    const item = resource === 'mf-rows' ? localRows.value.find((row) => row.id === Number(idText)) : localContainers.value.find((row) => row.id === Number(idText))
-    if (item) void save(resource, Number(idText), field, (item as unknown as Record<string, unknown>)[field])
-  }
-}
-onBeforeUnmount(flush)
+onBeforeUnmount(() => {
+  autosave.flushAll()
+  autosave.stop()
+})
 </script>
 
 <template>
@@ -144,7 +151,7 @@ onBeforeUnmount(flush)
             <div class="type-row"><button class="type" :disabled="readonly" @click.stop="openMenu = openMenu === container.id ? null : container.id">{{ typeEmoji(container.container_type) }} {{ typeLabel(container.container_type) }} ▾</button><button v-if="canDelete" class="x" @click="remove('mf-containers',container.id,'容器')">×</button></div>
             <div v-if="openMenu === container.id" class="menu" @click.stop><button @click="selectType(container,'insulated_box')">🧰 保温ボックス</button><button @click="selectType(container,'food_warmer')">♨️ フードウォーマー</button><button @click="selectType(container,'register')">🔢 打込み</button></div>
             <input v-model="container.name" placeholder="名称" :disabled="readonly" @input="schedule('mf-containers',container.id,'name',container.name)" @blur="save('mf-containers',container.id,'name',container.name)" @compositionstart="composing.add(`mf-containers:${container.id}:name`)" @compositionend="composing.delete(`mf-containers:${container.id}:name`);schedule('mf-containers',container.id,'name',container.name)" />
-            <div v-if="container.container_type === 'register'" class="number"><input v-model.number="container.quantity" type="number" min="0" :disabled="readonly" @input="schedule('mf-containers',container.id,'quantity',container.quantity)" @blur="save('mf-containers',container.id,'quantity',container.quantity)" /><span>個</span></div>
+            <div v-if="container.container_type === 'register'" class="number"><input v-model.number="container.quantity" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="readonly" @input="schedule('mf-containers',container.id,'quantity',container.quantity)" @blur="save('mf-containers',container.id,'quantity',container.quantity)" /><span>個</span></div>
             <div v-else class="battery-wrap"><div class="battery" :class="levelClass(container.quantity)"><div class="battery-terminal"></div><div class="battery-fill" :style="{width:`${Math.min(100,container.quantity)}%`}"></div><div class="battery-content"><b>{{ Math.round(container.quantity / 10) }}割</b></div></div><input v-model.number="container.quantity" class="range" type="range" min="0" max="100" :disabled="readonly" @input="schedule('mf-containers',container.id,'quantity',container.quantity)" @change="save('mf-containers',container.id,'quantity',container.quantity)" /></div>
           </div><button class="add-container-card" :disabled="readonly" @click="addContainer(row)"><span>＋</span><span>追加</span></button>
         </div></td>
