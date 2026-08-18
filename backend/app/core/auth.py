@@ -1,8 +1,10 @@
+import logging
 from dataclasses import dataclass
 from threading import RLock
 from time import monotonic
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from supabase_auth.errors import AuthApiError, AuthInvalidJwtError, AuthRetryableError
@@ -11,6 +13,7 @@ from app.core.db import get_user_profile
 from app.core.errors import forbidden, unauthorized
 from app.supabase_client import verify_access_token
 
+logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
 PROFILE_CACHE_TTL_SECONDS = 10.0
 _profile_cache: dict[str, tuple[float, dict]] = {}
@@ -61,28 +64,62 @@ def get_current_user(
     try:
         auth_response = verify_access_token(credentials.credentials)
     except AuthInvalidJwtError as exc:
+        logger.warning(
+            "Access token was rejected: type=%s reason=%s",
+            type(exc).__name__,
+            str(exc),
+        )
         raise unauthorized() from exc
     except AuthApiError as exc:
         if exc.status in {400, 401, 403}:
+            logger.warning(
+                "Supabase Auth rejected the access token: type=%s status=%s",
+                type(exc).__name__,
+                exc.status,
+            )
             raise unauthorized() from exc
+        logger.warning(
+            "Supabase Auth verification failed: type=%s status=%s",
+            type(exc).__name__,
+            exc.status,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service is temporarily unavailable",
         ) from exc
-    except (AuthRetryableError, OSError) as exc:
+    except (AuthRetryableError, httpx.TransportError, OSError) as exc:
+        logger.warning(
+            "Supabase Auth verification temporarily failed: type=%s",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication service is temporarily unavailable",
         ) from exc
     except Exception as exc:
+        logger.exception(
+            "Unexpected authentication verification failure: type=%s",
+            type(exc).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Authentication verification failed temporarily",
         ) from exc
 
-    auth_user = getattr(auth_response, "user", None)
-    auth_user_id = getattr(auth_user, "id", None)
+    claims = (
+        auth_response.get("claims", {})
+        if isinstance(auth_response, dict)
+        else getattr(auth_response, "claims", None) or {}
+    )
+    auth_user_id = claims.get("sub") if isinstance(claims, dict) else None
     if not auth_user_id:
+        auth_user = getattr(auth_response, "user", None)
+        auth_user_id = getattr(auth_user, "id", None)
+    if not auth_user_id:
+        logger.warning(
+            "Verified access token did not contain a subject: claim_keys=%s",
+            sorted(claims.keys()) if isinstance(claims, dict) else [],
+        )
         raise unauthorized()
 
     profile = _cached_user_profile(str(auth_user_id))

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
 import {
   createAutosaveQueue,
   normalizePostgresInteger,
@@ -21,15 +22,19 @@ type Field = 'store_id' | 'product_id' | 'expected_quantity' | 'actual_quantity'
 const localRows = ref<MTableRow[]>([])
 const autosave = createAutosaveQueue()
 const composing = new Set<string>()
+const live = useLiveBoard()
 
 const sortedRows = computed(() => [...localRows.value].sort((a, b) => a.sort_order - b.sort_order))
 watch(() => props.rows, (rows) => {
   localRows.value = rows.map((incoming) => {
     const current = localRows.value.find((row) => row.id === incoming.id)
-    if (!current) return { ...incoming }
     const merged = { ...incoming }
     for (const field of ['store_id','product_id','expected_quantity','actual_quantity','note'] as Field[]) {
-      if (autosave.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
+      const liveValue = ['expected_quantity', 'actual_quantity', 'note'].includes(field)
+        ? live?.getValue('m-rows', incoming.id, field)
+        : undefined
+      if (liveValue !== undefined) merged[field] = liveValue as never
+      else if (current && autosave.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
     }
     return merged
   })
@@ -42,6 +47,10 @@ function unit(id: number) { return props.products.find((product) => product.id =
 function schedule(row: MTableRow, field: Field) {
   const timerKey = `${row.id}:${field}`
   if (composing.has(timerKey)) return
+  if (live && ['expected_quantity', 'actual_quantity', 'note'].includes(field)) {
+    live.edit('m-rows', row.id, field, row[field])
+    return
+  }
   autosave.schedule(timerKey, async () => {
     if (field === 'expected_quantity' || field === 'actual_quantity') {
       row[field] = normalizePostgresInteger(row[field])
@@ -54,6 +63,7 @@ function schedule(row: MTableRow, field: Field) {
   })
 }
 function save(row: MTableRow, field: Field) {
+  if (live && ['expected_quantity', 'actual_quantity', 'note'].includes(field)) return
   const timerKey = `${row.id}:${field}`
   if (!autosave.has(timerKey)) schedule(row, field)
   autosave.flush(timerKey)
@@ -72,8 +82,11 @@ async function confirmRow(row: MTableRow) {
 async function removeRow(row: MTableRow) {
   if (!confirm('この棚卸行を削除しますか？')) return
   autosave.cancelMatching((key) => key.startsWith(`${row.id}:`))
+  live?.cancel('m-rows', row.id)
+  const before = localRows.value
+  localRows.value = localRows.value.filter((item) => item.id !== row.id)
   try { await boardService.remove('inventory', 'm-rows', row.id); emit('refresh') }
-  catch { emit('error', '棚卸行を削除できませんでした。') }
+  catch { localRows.value = before; emit('error', '棚卸行を削除できませんでした。') }
 }
 async function clearRows() {
   if (!confirm('実数・備考・確認状態をクリアしますか？')) return
@@ -81,8 +94,15 @@ async function clearRows() {
   catch { emit('error', '棚卸表をクリアできませんでした。') }
 }
 onBeforeUnmount(() => {
+  unsubscribeLive?.()
   autosave.flushAll()
   autosave.stop()
+})
+
+const unsubscribeLive = live?.subscribe((change) => {
+  if (change.resource !== 'm-rows' || !['expected_quantity', 'actual_quantity', 'note'].includes(change.field)) return
+  const row = localRows.value.find((item) => item.id === change.recordId)
+  if (row) (row as unknown as Record<string, unknown>)[change.field] = change.value
 })
 </script>
 
@@ -94,11 +114,11 @@ onBeforeUnmount(() => {
       <tbody><tr v-for="row in sortedRows" :key="row.id" :class="{ confirmed: row.is_confirmed }">
         <td><select v-model="row.store_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'store_id')"><option v-for="store in stores.filter(item => item.is_active && canEditStore(item.id))" :key="store.id" :value="store.id">{{ store.name }}</option></select><span class="print">{{ storeName(row.store_id) }}</span></td>
         <td><select v-model="row.product_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'product_id')"><option v-for="product in products.filter(item => item.is_active)" :key="product.id" :value="product.id">{{ product.name }}</option></select><span class="print">{{ productName(row.product_id) }}</span></td>
-        <td><div class="quantity"><input v-model.number="row.expected_quantity" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'expected_quantity')" @blur="save(row,'expected_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
-        <td><div class="quantity"><input v-model.number="row.actual_quantity" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'actual_quantity')" @blur="save(row,'actual_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td><div class="quantity"><input v-model.number="row.expected_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'expected_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'expected_quantity')" @blur="save(row,'expected_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td><div class="quantity"><input v-model.number="row.actual_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'actual_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'actual_quantity')" @blur="save(row,'actual_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
         <td :class="{ negative: row.actual_quantity-row.expected_quantity < 0, positive: row.actual_quantity-row.expected_quantity > 0 }">{{ row.actual_quantity - row.expected_quantity }}</td>
         <td><button class="confirm" :class="{ active: row.is_confirmed }" :disabled="!canConfirm" @click="confirmRow(row)">{{ row.is_confirmed ? '確定済み' : '未確定' }}</button></td>
-        <td><input v-model="row.note" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'note')" @blur="save(row,'note')" @compositionstart="composing.add(`${row.id}:note`)" @compositionend="composing.delete(`${row.id}:note`);schedule(row,'note')" /></td>
+        <td><input v-model="row.note" :data-live-field="liveFieldKey('m-rows',row.id,'note')" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'note')" @blur="save(row,'note')" @compositionstart="composing.add(`${row.id}:note`)" @compositionend="composing.delete(`${row.id}:note`);schedule(row,'note')" /></td>
         <td v-if="canDelete"><button class="delete" @click="removeRow(row)">削除</button></td>
       </tr></tbody>
     </table></div>

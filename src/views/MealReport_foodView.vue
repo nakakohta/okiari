@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
 import MFTable from '@/components/RestockTable/MFTable.vue'
+import { provideLiveBoard } from '@/composables/useLiveBoard'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
 import { mergeBoardChange } from '@/lib/boardRealtime'
@@ -42,8 +43,11 @@ async function changeStore(section: MFTableSection, event: Event) {
 }
 async function removeSection(section: MFTableSection) {
   if (!confirm('この売店を削除しますか？')) return
+  if (!data.value) return
+  const before = data.value.mftable_sections
+  data.value.mftable_sections = before.filter((item) => item.id !== section.id)
   try { await boardService.remove('meal-food', 'mf-sections', section.id); await load(true) }
-  catch { errorMessage.value = '売店を削除できませんでした。' }
+  catch { data.value.mftable_sections = before; errorMessage.value = '売店を削除できませんでした。' }
 }
 async function drop(index: number) {
   if (dragged.value === null || dragged.value === index) return
@@ -54,6 +58,7 @@ async function drop(index: number) {
   try { await boardService.reorder('meal-food', 'mf-sections', ordered.map((section) => section.id)); await load(true) }
   catch { errorMessage.value = '売店の並び順を保存できませんでした。' }
 }
+provideLiveBoard('meal-food', () => load(true))
 const { realtimeState } = useRealtimeBoard('meal-food', () => load(true), (change) => (
   data.value ? mergeBoardChange(data.value as MealFoodBoardData & Record<string, unknown>, change) : false
 ))

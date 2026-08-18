@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
 import MDTable from '@/components/RestockTable/MDTable.vue'
+import { provideLiveBoard } from '@/composables/useLiveBoard'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
 import { mergeBoardChange } from '@/lib/boardRealtime'
@@ -35,6 +36,7 @@ function canEditBooth(name: string) {
   const store = stores.value.find((item) => item.name === name)
   return Boolean(store && auth.canEditStore(store.id))
 }
+provideLiveBoard('meal-drink', () => load(true))
 const { realtimeState } = useRealtimeBoard('meal-drink', () => load(true), (change) => (
   data.value ? mergeBoardChange(data.value as MealDrinkBoardData & Record<string, unknown>, change) : false
 ))

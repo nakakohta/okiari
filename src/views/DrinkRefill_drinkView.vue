@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
 import DTable from '@/components/RestockTable/DTable.vue'
+import { provideLiveBoard } from '@/composables/useLiveBoard'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
 import { mergeBoardChange } from '@/lib/boardRealtime'
@@ -33,6 +34,7 @@ async function load(silent = false) {
 }
 function rows(storeId: number, scope: 'drink' | 'consumable') { return data.value?.dtable_rows.filter((row) => row.store_id === storeId && row.scope === scope) ?? [] }
 function locks(storeId: number, scope: 'drink' | 'consumable') { return data.value?.dtable_locks.filter((lock) => lock.store_id === storeId && lock.scope === scope) ?? [] }
+provideLiveBoard('drink-refill', () => load(true))
 const { realtimeState } = useRealtimeBoard('drink-refill', () => load(true), (change) => (
   data.value ? mergeBoardChange(data.value as DrinkBoardData & Record<string, unknown>, change) : false
 ))

@@ -296,6 +296,10 @@ def update_resource(key: str, resource: str, row_id: int, payload: ResourcePaylo
     updated = response_single(supabase.table(table).update(values).eq("id", row_id).select("*").execute(), "Row could not be updated")
     if resource == "m-rows":
         _inventory_replace(updated, current_user.auth_user_id)
+    if {"is_confirmed", "store_id", "booth"} & set(payload.values):
+        from app.routers.live_collaboration import manager
+
+        manager.invalidate_authorization()
     return updated
 
 
@@ -314,6 +318,9 @@ def delete_resource(key: str, resource: str, row_id: int, current_user: Authenti
         supabase.table(table).update({"deleted_at": _now(), "deleted_by": current_user.auth_user_id, "updated_by": current_user.auth_user_id, "updated_at": _now()})
         .eq("id", row_id).select("*").execute(), "Row could not be deleted",
     )
+    from app.routers.live_collaboration import delete_live_fields
+
+    delete_live_fields(key, resource, row_id)
     return result
 
 
@@ -351,7 +358,11 @@ def update_lock(key: str, payload: LockPayload, current_user: AuthenticatedUser)
     else:
         raise bad_request("This board has no shared locks")
     values.update({"is_locked": payload.is_locked, "updated_by": current_user.auth_user_id, "updated_at": _now()})
-    return response_single(supabase.table(table).upsert(values, on_conflict=conflict).select("*").execute(), "Lock could not be saved")
+    result = response_single(supabase.table(table).upsert(values, on_conflict=conflict).select("*").execute(), "Lock could not be saved")
+    from app.routers.live_collaboration import manager
+
+    manager.invalidate_authorization()
+    return result
 
 
 @router.post("/{key}/actions/clear")
@@ -378,6 +389,9 @@ def clear_board(key: str, payload: ClearPayload, current_user: AuthenticatedUser
         supabase.table("mftable_containers").update({**common, "quantity": 0}).eq("board_id", board["id"]).is_("deleted_at", "null").execute()
     else:
         raise bad_request("Unsupported board")
+    from app.routers.live_collaboration import clear_action_live_fields
+
+    clear_action_live_fields(key, payload.model_dump())
     return {"ok": True, "snapshot_id": snapshot["id"]}
 
 
@@ -416,4 +430,7 @@ def restore_snapshot(key: str, snapshot_id: int, current_user: AuthenticatedUser
             if table not in {"mdtable_cells", "dtable_locks", "mdtable_locks"}:
                 row.update({"deleted_at": None, "deleted_by": None})
             supabase.table(table).update(row).eq("id", row_id).eq("board_id", board["id"]).execute()
+    from app.routers.live_collaboration import clear_live_fields
+
+    clear_live_fields(key)
     return {"ok": True}

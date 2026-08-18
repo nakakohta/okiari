@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
 import { createAutosaveQueue } from '@/lib/autosave'
 import type { MDTableCell, MDTableColumn, MDTableLock, MDTableRow } from '@/lib/types'
 
@@ -25,6 +26,7 @@ const values = ref<Record<string, string>>({})
 const popupRowId = ref<number | null>(null)
 const autosave = createAutosaveQueue()
 const composing = new Set<string>()
+const live = useLiveBoard()
 
 const boothGroups = {
   first: ['CSL', 'VIP(ブルー)', 'VIP(レッド)', 'その他'],
@@ -39,19 +41,25 @@ const sortedColumns = computed(() => [...localColumns.value].sort((a, b) => a.so
 watch(() => props.rows, (rows) => {
   localRows.value = rows.map((incoming) => {
     const current = localRows.value.find((row) => row.id === incoming.id)
+    const liveValue = live?.getValue('md-rows', incoming.id, 'custom_booth')
+    if (liveValue !== undefined) return { ...incoming, custom_booth: String(liveValue) }
     return current && autosave.has(`row:${incoming.id}:custom_booth`) ? { ...incoming, custom_booth: current.custom_booth } : { ...incoming }
   })
 }, { immediate: true, deep: true })
 watch(() => props.columns, (columns) => {
   localColumns.value = columns.map((incoming) => {
     const current = localColumns.value.find((column) => column.id === incoming.id)
+    const liveValue = live?.getValue('md-columns', incoming.id, 'title')
+    if (liveValue !== undefined) return { ...incoming, title: String(liveValue) }
     return current && autosave.has(`column:${incoming.id}:title`) ? { ...incoming, title: current.title } : { ...incoming }
   })
 }, { immediate: true, deep: true })
 watch(() => props.cells, (cells) => {
   for (const cell of cells) {
     const cellKey = key(cell.row_id, cell.column_id)
-    if (!autosave.has(cellKey)) values.value[cellKey] = cell.value
+    const liveValue = live?.getValue('md-cells', cell.id, 'value', { row_id: cell.row_id, column_id: cell.column_id })
+    if (liveValue !== undefined) values.value[cellKey] = String(liveValue)
+    else if (!autosave.has(cellKey)) values.value[cellKey] = cell.value
   }
 }, { immediate: true, deep: true })
 
@@ -62,6 +70,14 @@ function rowEditable(row: MDTableRow) { return props.canEditBooth(row.booth) }
 function scheduleCell(rowId: number, columnId: number) {
   const cellKey = key(rowId, columnId)
   if (composing.has(cellKey)) return
+  if (live) {
+    const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
+    live.edit('md-cells', existing?.id ?? 0, 'value', values.value[cellKey] ?? '', {
+      row_id: rowId,
+      column_id: columnId,
+    })
+    return
+  }
   autosave.schedule(cellKey, async () => {
     const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
     if (existing) await boardService.update('meal-drink', 'md-cells', existing.id, { value: values.value[cellKey] ?? '' })
@@ -74,6 +90,7 @@ function scheduleCell(rowId: number, columnId: number) {
 }
 
 function saveCell(rowId: number, columnId: number) {
+  if (live) return
   const cellKey = key(rowId, columnId)
   if (!autosave.has(cellKey)) scheduleCell(rowId, columnId)
   autosave.flush(cellKey)
@@ -87,6 +104,10 @@ async function saveRow(row: MDTableRow, fields: Record<string, unknown>) {
 function scheduleCustomBooth(row: MDTableRow) {
   const timerKey = `row:${row.id}:custom_booth`
   if (composing.has(`row:${row.id}`)) return
+  if (live) {
+    live.edit('md-rows', row.id, 'custom_booth', row.custom_booth)
+    return
+  }
   autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }), {
     onError: (willRetry) => emit('error', willRetry
       ? '通信が不安定なため、その他売店名の保存を再試行します。'
@@ -94,6 +115,7 @@ function scheduleCustomBooth(row: MDTableRow) {
   })
 }
 function saveCustomBooth(row: MDTableRow) {
+  if (live) return
   const timerKey = `row:${row.id}:custom_booth`
   if (!autosave.has(timerKey)) scheduleCustomBooth(row)
   autosave.flush(timerKey)
@@ -125,6 +147,10 @@ async function addColumn() {
 function scheduleColumn(column: MDTableColumn) {
   const timerKey = `column:${column.id}:title`
   if (composing.has(`column:${column.id}`)) return
+  if (live) {
+    live.edit('md-columns', column.id, 'title', column.title)
+    return
+  }
   autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }), {
     onError: (willRetry) => emit('error', willRetry
       ? '通信が不安定なため、列名の保存を再試行します。'
@@ -132,6 +158,7 @@ function scheduleColumn(column: MDTableColumn) {
   })
 }
 function saveColumn(column: MDTableColumn) {
+  if (live) return
   const timerKey = `column:${column.id}:title`
   if (!autosave.has(timerKey)) scheduleColumn(column)
   autosave.flush(timerKey)
@@ -144,8 +171,17 @@ async function remove(resource: 'md-rows' | 'md-columns', id: number, label: str
   } else {
     autosave.cancelMatching((timerKey) => timerKey.startsWith(`column:${id}:`) || timerKey.endsWith(`:${id}`))
   }
+  live?.cancel(resource, id)
+  const beforeRows = localRows.value
+  const beforeColumns = localColumns.value
+  if (resource === 'md-rows') localRows.value = localRows.value.filter((row) => row.id !== id)
+  else localColumns.value = localColumns.value.filter((column) => column.id !== id)
   try { await boardService.remove('meal-drink', resource, id); emit('refresh') }
-  catch { emit('error', `${label}を削除できませんでした。`) }
+  catch {
+    localRows.value = beforeRows
+    localColumns.value = beforeColumns
+    emit('error', `${label}を削除できませんでした。`)
+  }
 }
 
 async function toggleLock() {
@@ -160,8 +196,24 @@ async function clearData() {
 }
 
 onBeforeUnmount(() => {
+  unsubscribeLive?.()
   autosave.flushAll()
   autosave.stop()
+})
+
+const unsubscribeLive = live?.subscribe((change) => {
+  if (change.resource === 'md-rows' && change.field === 'custom_booth') {
+    const row = localRows.value.find((item) => item.id === change.recordId)
+    if (row) row.custom_booth = String(change.value ?? '')
+  } else if (change.resource === 'md-columns' && change.field === 'title') {
+    const column = localColumns.value.find((item) => item.id === change.recordId)
+    if (column) column.title = String(change.value ?? '')
+  } else if (change.resource === 'md-cells' && change.field === 'value') {
+    const cell = props.cells.find((item) => item.id === change.recordId)
+    const rowId = change.relations?.row_id ?? cell?.row_id
+    const columnId = change.relations?.column_id ?? cell?.column_id
+    if (rowId && columnId) values.value[key(rowId, columnId)] = String(change.value ?? '')
+  }
 })
 </script>
 
@@ -173,7 +225,7 @@ onBeforeUnmount(() => {
       <thead><tr>
         <th class="booth-head">売店 <button class="lock" :disabled="!canManageLocks" @click="toggleLock">{{ boothLocked ? '🔒' : '🔓' }}</button></th>
         <th v-for="column in sortedColumns" :key="column.id">
-          <input v-model="column.title" :disabled="!canEditStructure" @input="scheduleColumn(column)" @blur="saveColumn(column)" @compositionstart="composing.add(`column:${column.id}`)" @compositionend="composing.delete(`column:${column.id}`);scheduleColumn(column)" />
+          <input v-model="column.title" :data-live-field="liveFieldKey('md-columns',column.id,'title')" :disabled="!canEditStructure" @input="scheduleColumn(column)" @blur="saveColumn(column)" @compositionstart="composing.add(`column:${column.id}`)" @compositionend="composing.delete(`column:${column.id}`);scheduleColumn(column)" />
           <button v-if="canDelete" class="small-delete" @click="remove('md-columns', column.id, '列')">×</button>
         </th><th v-if="canDelete"></th>
       </tr></thead>
@@ -182,11 +234,11 @@ onBeforeUnmount(() => {
           <button class="booth" :disabled="boothLocked || !canSelectBooth" @click="popupRowId = popupRowId === row.id ? null : row.id">{{ displayBooth(row) }} ▾</button>
           <div v-if="popupRowId === row.id" class="booth-popup">
             <button v-for="booth in boothGroups[floorGroup]" :key="booth" :disabled="!canEditBooth(booth)" @click="selectBooth(row, booth)">{{ booth }}</button>
-            <div v-if="row.booth === 'その他'" class="custom"><input v-model="row.custom_booth" placeholder="売店名" @input="scheduleCustomBooth(row)" @blur="saveCustomBooth(row)" @compositionstart="composing.add(`row:${row.id}`)" @compositionend="composing.delete(`row:${row.id}`);scheduleCustomBooth(row)" /><button @click="popupRowId = null">決定</button></div>
+            <div v-if="row.booth === 'その他'" class="custom"><input v-model="row.custom_booth" :data-live-field="liveFieldKey('md-rows',row.id,'custom_booth')" placeholder="売店名" @input="scheduleCustomBooth(row)" @blur="saveCustomBooth(row)" @compositionstart="composing.add(`row:${row.id}`)" @compositionend="composing.delete(`row:${row.id}`);scheduleCustomBooth(row)" /><button @click="popupRowId = null">決定</button></div>
           </div>
         </td>
         <td v-for="column in sortedColumns" :key="column.id">
-          <input v-model="values[key(row.id,column.id)]" inputmode="numeric" :disabled="!rowEditable(row)" @input="scheduleCell(row.id,column.id)" @blur="saveCell(row.id,column.id)" @compositionstart="composing.add(key(row.id,column.id))" @compositionend="composing.delete(key(row.id,column.id));scheduleCell(row.id,column.id)" />
+          <input v-model="values[key(row.id,column.id)]" :data-live-field="liveFieldKey('md-cells',props.cells.find(cell => cell.row_id === row.id && cell.column_id === column.id)?.id ?? 0,'value',{row_id:row.id,column_id:column.id})" inputmode="numeric" :disabled="!rowEditable(row)" @input="scheduleCell(row.id,column.id)" @blur="saveCell(row.id,column.id)" @compositionstart="composing.add(key(row.id,column.id))" @compositionend="composing.delete(key(row.id,column.id));scheduleCell(row.id,column.id)" />
         </td>
         <td v-if="canDelete"><button class="small-delete" @click="remove('md-rows', row.id, '行')">削除</button></td>
       </tr></tbody>

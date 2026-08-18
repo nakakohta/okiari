@@ -166,6 +166,10 @@ export type BoardResource =
   | 'm-rows'
 
 export const boardService = {
+  async collaborationTicket(board: BoardKey) {
+    const { data } = await api.post<{ ticket: string; expires_in: number }>(`/boards/${board}/collaboration-ticket`)
+    return data
+  },
   async drink() {
     const { data } = await api.get<DrinkBoardData>('/boards/drink-refill')
     return data

@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
 import Sidebar from '@/components/AppSidebar.vue'
 import MTable from '@/components/RestockTable/MTable.vue'
+import { provideLiveBoard } from '@/composables/useLiveBoard'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
 import { mergeBoardChange } from '@/lib/boardRealtime'
@@ -23,6 +24,7 @@ async function load(silent = false) {
   } catch { errorMessage.value = '棚卸表を取得できませんでした。' }
   finally { if (!silent) loading.value = false }
 }
+provideLiveBoard('inventory', () => load(true))
 const { realtimeState } = useRealtimeBoard('inventory', () => load(true), (change) => (
   data.value ? mergeBoardChange(data.value as InventoryBoardData & Record<string, unknown>, change) : false
 ))
