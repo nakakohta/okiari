@@ -104,9 +104,28 @@ function serviceKey(env: ApiEnv) {
 }
 
 function assertConfigured(env: ApiEnv) {
-  if (!env.SUPABASE_URL || !serviceKey(env)) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY || !serviceKey(env)) {
     throw new ApiError(503, 'Database service is not configured')
   }
+}
+
+async function verifyAccessToken(token: string, env: ApiEnv) {
+  let response: Response
+  try {
+    response = await fetch(`${env.SUPABASE_URL!.replace(/\/$/, '')}/auth/v1/user`, {
+      headers: {
+        apikey: env.SUPABASE_PUBLISHABLE_KEY!,
+        Authorization: `Bearer ${token}`,
+      },
+    })
+  } catch {
+    throw new ApiError(503, 'Authentication service is unavailable')
+  }
+
+  if (!response.ok) throw new ApiError(401, 'Not authenticated')
+  const user = await response.json() as { id?: string }
+  if (!user.id) throw new ApiError(401, 'Not authenticated')
+  return user.id
 }
 
 async function requireAuth(request: Request, env: ApiEnv): Promise<AuthContext> {
@@ -114,16 +133,15 @@ async function requireAuth(request: Request, env: ApiEnv): Promise<AuthContext> 
   const token = bearerToken(request)
   if (!token) throw new ApiError(401, 'Not authenticated')
 
+  const userId = await verifyAccessToken(token, env)
   const client = createClient(env.SUPABASE_URL!, serviceKey(env), {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   })
-  const { data: authData, error: authError } = await client.auth.getUser(token)
-  if (authError || !authData.user) throw new ApiError(401, 'Not authenticated')
 
   const { data: profile, error: profileError } = await client
     .from('app_users')
     .select('id,display_name,email,role_id,is_active,created_at,updated_at,role:app_roles(id,code,name,description,created_at)')
-    .eq('id', authData.user.id)
+    .eq('id', userId)
     .maybeSingle()
   if (profileError) throw new ApiError(503, 'User profile could not be loaded')
   if (!profile) throw new ApiError(403, 'Authenticated user is not registered')
@@ -139,12 +157,12 @@ async function requireAuth(request: Request, env: ApiEnv): Promise<AuthContext> 
   const { data: assignments, error: assignmentError } = await client
     .from('user_store_assignments')
     .select('store_id,can_view,can_edit')
-    .eq('user_id', authData.user.id)
+    .eq('user_id', userId)
   if (assignmentError) throw new ApiError(503, 'Store assignments could not be loaded')
 
   return {
     client,
-    userId: authData.user.id,
+    userId,
     profile: profile as JsonRecord,
     role,
     roleCode: roleCode as RoleCode,
