@@ -17,6 +17,7 @@ async function refreshSessionOnce() {
 
 export const api = axios.create({
   baseURL: apiBaseUrl(),
+  timeout: 12_000,
   headers: {
     'Content-Type': 'application/json',
   },
