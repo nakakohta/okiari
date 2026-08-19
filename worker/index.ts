@@ -131,6 +131,13 @@ export default {
       return jsonResponse({ detail: 'Backend API is not configured for this deployment' }, 503)
     }
 
-    return secureResponse(await env.ASSETS.fetch(request))
+    const assetResponse = await env.ASSETS.fetch(request)
+    const lastPathPart = url.pathname.split('/').pop() || ''
+    if (request.method === 'GET' && assetResponse.status === 404 && !lastPathPart.includes('.')) {
+      const fallbackUrl = new URL('/', request.url)
+      return secureResponse(await env.ASSETS.fetch(new Request(fallbackUrl, request)))
+    }
+
+    return secureResponse(assetResponse)
   },
 }
