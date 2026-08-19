@@ -4,7 +4,6 @@ interface Env {
   }
   SUPABASE_URL?: string
   SUPABASE_PUBLISHABLE_KEY?: string
-  SUPABASE_SERVICE_ROLE_KEY?: string
 }
 
 const SECURITY_HEADERS = {
@@ -46,74 +45,23 @@ async function fetchCurrentUser(request: Request, env: Env) {
 
   const supabaseUrl = env.SUPABASE_URL?.replace(/\/$/, '')
   const publishableKey = env.SUPABASE_PUBLISHABLE_KEY
-  const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !publishableKey || !serviceRoleKey) {
+  if (!supabaseUrl || !publishableKey) {
     return jsonResponse({ detail: 'Authentication service is not configured' }, 503)
   }
 
-  const authResponse = await fetch(`${supabaseUrl}/auth/v1/user`, {
+  const authResponse = await fetch(`${supabaseUrl}/functions/v1/private-workspace-auth-me`, {
     headers: {
       apikey: publishableKey,
       Authorization: `Bearer ${accessToken}`,
     },
   })
-  if (!authResponse.ok) {
-    return jsonResponse({ detail: 'Not authenticated' }, 401)
-  }
-
-  const authUser = await authResponse.json<{ id?: string }>()
-  if (!authUser.id) {
-    return jsonResponse({ detail: 'Not authenticated' }, 401)
-  }
-
-  const serviceHeaders = {
-    apikey: serviceRoleKey,
-    Authorization: `Bearer ${serviceRoleKey}`,
-  }
-  const userQuery = new URLSearchParams({
-    id: `eq.${authUser.id}`,
-    select: 'id,display_name,email,role_id,is_active,created_at,updated_at,role:app_roles(id,code,name,description,created_at)',
-    limit: '1',
-  })
-  const profileResponse = await fetch(`${supabaseUrl}/rest/v1/app_users?${userQuery}`, {
-    headers: serviceHeaders,
-  })
-  if (!profileResponse.ok) {
-    return jsonResponse({ detail: 'User profile could not be loaded' }, 503)
-  }
-
-  const profiles = await profileResponse.json<Array<Record<string, unknown>>>()
-  const profile = profiles[0]
-  if (!profile) {
-    return jsonResponse({ detail: 'Authenticated user is not registered' }, 403)
-  }
-  if (profile.is_active === false) {
-    return jsonResponse({ detail: 'Inactive user' }, 403)
-  }
-
-  const role = profile.role
-  if (!role || typeof role !== 'object' || !('code' in role)) {
-    return jsonResponse({ detail: 'User role is not configured' }, 403)
-  }
-
-  const assignmentQuery = new URLSearchParams({
-    user_id: `eq.${authUser.id}`,
-    select: 'store_id,can_view,can_edit',
-  })
-  const assignmentResponse = await fetch(
-    `${supabaseUrl}/rest/v1/user_store_assignments?${assignmentQuery}`,
-    { headers: serviceHeaders },
-  )
-  if (!assignmentResponse.ok) {
-    return jsonResponse({ detail: 'Store assignments could not be loaded' }, 503)
-  }
-
-  const storeAssignments = await assignmentResponse.json()
-  return jsonResponse({
-    user: profile,
-    role,
-    store_assignments: storeAssignments,
-  })
+  const headers = new Headers(authResponse.headers)
+  headers.delete('set-cookie')
+  return secureResponse(new Response(authResponse.body, {
+    status: authResponse.status,
+    statusText: authResponse.statusText,
+    headers,
+  }))
 }
 
 export default {
