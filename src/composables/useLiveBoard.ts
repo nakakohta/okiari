@@ -1,7 +1,8 @@
 import { inject, nextTick, onMounted, onUnmounted, provide, shallowRef } from 'vue'
 import type { ShallowRef } from 'vue'
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import { boardService, type BoardKey, type BoardResource } from '@/lib/services'
-import { boardWebSocketUrl } from '@/lib/apiBase'
+import { supabase } from '@/lib/supabase'
 
 export interface LiveFieldRelations {
   row_id?: number
@@ -15,59 +16,30 @@ export interface LiveFieldChange {
   field: string
   value: unknown
   revision: number
-  actorId?: string | null
-  clientId?: string | null
-  clientSeq?: number | null
+  clientId: string
+  clientSeq: number
   relations?: LiveFieldRelations
 }
 
 interface PendingEdit {
-  clientSeq: number
-  message: Record<string, unknown>
-}
-
-interface UnpersistedEdit extends PendingEdit {
-  actualRecordId: number
-  confirmedRevision?: number
-  field: string
-  resource: BoardResource
+  change: LiveFieldChange
+  timer: ReturnType<typeof setTimeout>
 }
 
 type FieldHandler = (change: LiveFieldChange) => void
 
 export interface LiveBoardContext {
   cancel(resource: BoardResource, recordId: number): void
-  edit(
-    resource: BoardResource,
-    recordId: number,
-    field: string,
-    value: unknown,
-    relations?: LiveFieldRelations,
-  ): void
-  getValue(
-    resource: BoardResource,
-    recordId: number,
-    field: string,
-    relations?: LiveFieldRelations,
-  ): unknown
-  hasPending(
-    resource: BoardResource,
-    recordId: number,
-    field: string,
-    relations?: LiveFieldRelations,
-  ): boolean
+  edit(resource: BoardResource, recordId: number, field: string, value: unknown, relations?: LiveFieldRelations): void
+  getValue(resource: BoardResource, recordId: number, field: string, relations?: LiveFieldRelations): unknown
+  hasPending(resource: BoardResource, recordId: number, field: string, relations?: LiveFieldRelations): boolean
   lastChange: ShallowRef<LiveFieldChange | null>
   subscribe(handler: FieldHandler): () => void
 }
 
 const liveBoardKey = Symbol('live-board')
 
-function fieldKey(
-  resource: BoardResource,
-  recordId: number,
-  field: string,
-  relations?: LiveFieldRelations,
-) {
+function fieldKey(resource: BoardResource, recordId: number, field: string, relations?: LiveFieldRelations) {
   if (resource === 'md-cells' && relations?.row_id && relations.column_id) {
     return `${resource}:${relations.row_id}:${relations.column_id}:${field}`
   }
@@ -111,38 +83,11 @@ export function provideLiveBoard(board: BoardKey, refresh: () => Promise<void> |
   const revisions = new Map<string, number>()
   const values = new Map<string, unknown>()
   const pending = new Map<string, PendingEdit>()
-  const unpersisted = new Map<string, UnpersistedEdit>()
   const deferred = new Map<string, LiveFieldChange>()
-  const queued = new Map<string, Record<string, unknown>>()
-  let socket: WebSocket | null = null
+  const queued = new Map<string, LiveFieldChange>()
+  let channel: RealtimeChannel | null = null
   let clientSeq = 0
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let reconnectAttempt = 0
   let ready = false
-  let stopped = false
-
-  function removeTarget(target: {
-    resource: BoardResource
-    recordId: number
-    field?: string
-    relations?: LiveFieldRelations
-  }) {
-    const matches = (key: string) => {
-      const parts = key.split(':')
-      const fieldMatches = !target.field || parts.at(-1) === target.field
-      if (parts[0] === target.resource && Number(parts[1]) === target.recordId && fieldMatches) return true
-      if (parts[0] !== 'md-cells') return false
-      if (target.resource === 'md-rows' && Number(parts[1]) === target.recordId && fieldMatches) return true
-      if (target.resource === 'md-columns' && Number(parts[2]) === target.recordId && fieldMatches) return true
-      return target.resource === 'md-cells'
-        && Number(parts[1]) === target.relations?.row_id
-        && Number(parts[2]) === target.relations?.column_id
-        && fieldMatches
-    }
-    for (const collection of [revisions, values, pending, unpersisted, deferred, queued]) {
-      for (const key of collection.keys()) if (matches(key)) collection.delete(key)
-    }
-  }
 
   function apply(change: LiveFieldChange, key: string) {
     const before = values.get(key)
@@ -156,196 +101,98 @@ export function provideLiveBoard(board: BoardKey, refresh: () => Promise<void> |
   }
 
   function processChange(change: LiveFieldChange) {
+    if (!change || change.type !== 'field_changed' || change.clientId === clientId) return
     const key = fieldKey(change.resource, change.recordId, change.field, change.relations)
     if (change.revision <= (revisions.get(key) ?? 0)) return
     revisions.set(key, change.revision)
     const outstanding = pending.get(key)
-    const own = change.clientId === clientId
-
-    if (own) {
-      const durable = unpersisted.get(key)
-      if (durable && durable.clientSeq === change.clientSeq) {
-        durable.actualRecordId = change.recordId
-        durable.confirmedRevision = change.revision
-      }
-    }
-
-    if (own && outstanding) {
-      const acknowledged = change.clientSeq ?? 0
-      if (acknowledged < outstanding.clientSeq) return
-      pending.delete(key)
-      const held = deferred.get(key)
-      deferred.delete(key)
-      if (held && held.revision > change.revision) apply(held, key)
-      else apply(change, key)
-      return
-    }
-
     if (outstanding) {
-      const held = deferred.get(key)
-      if (!held || held.revision < change.revision) deferred.set(key, change)
+      if (change.revision > outstanding.change.revision) deferred.set(key, change)
       return
     }
     apply(change, key)
   }
 
-  function flushQueue() {
-    if (!ready || socket?.readyState !== WebSocket.OPEN) return
-    for (const message of queued.values()) socket.send(JSON.stringify(message))
-    queued.clear()
+  function broadcast(change: LiveFieldChange) {
+    if (!ready || !channel) {
+      queued.set(fieldKey(change.resource, change.recordId, change.field, change.relations), change)
+      return
+    }
+    void channel.send({ type: 'broadcast', event: 'field_changed', payload: change })
   }
 
-  function scheduleReconnect() {
-    if (stopped || reconnectTimer) return
-    const delay = Math.min(10_000, 500 * 2 ** Math.min(reconnectAttempt, 4))
-    reconnectAttempt += 1
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null
-      void connect()
-    }, delay)
-  }
-
-  async function connect() {
-    if (stopped || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return
+  async function persist(key: string, edit: PendingEdit) {
+    const { change } = edit
     try {
-      const { ticket } = await boardService.collaborationTicket(board)
-      if (stopped) return
-      socket = new WebSocket(boardWebSocketUrl(board))
-      socket.addEventListener('open', () => {
-        socket?.send(JSON.stringify({ type: 'authenticate', ticket }))
-      })
-      socket.addEventListener('message', (event) => {
-        const message = JSON.parse(String(event.data)) as Record<string, unknown>
-        if (message.type === 'sync' && Array.isArray(message.values)) {
-          for (const item of message.values) processChange(item as LiveFieldChange)
-          ready = true
-          reconnectAttempt = 0
-          flushQueue()
-          return
+      if (change.resource === 'md-cells' && change.relations) {
+        if (change.recordId > 0) {
+          await boardService.update(board, change.resource, change.recordId, { [change.field]: change.value })
+        } else {
+          const created = await boardService.create<{ id: number }>(board, change.resource, {
+            ...change.relations,
+            [change.field]: change.value,
+          })
+          change.recordId = created.id
         }
-        if (message.type === 'field_changed') {
-          processChange(message as unknown as LiveFieldChange)
-          return
-        }
-        if (message.type === 'field_persisted') {
-          for (const [key, edit] of unpersisted) {
-            if (
-              edit.resource === message.resource
-              && edit.actualRecordId === message.recordId
-              && edit.field === message.field
-              && edit.confirmedRevision !== undefined
-              && edit.confirmedRevision <= Number(message.revision)
-            ) unpersisted.delete(key)
-          }
-          return
-        }
-        if (message.type === 'field_error') {
-          const resource = message.resource as BoardResource
-          const recordId = Number(message.recordId)
-          const field = String(message.field ?? '')
-          const relations = message.relations as LiveFieldRelations | undefined
-          const key = fieldKey(resource, recordId, field, relations)
-          const outstanding = pending.get(key)
-          const rejectedSequence = Number(message.clientSeq ?? 0)
-          if (outstanding && rejectedSequence < outstanding.clientSeq) return
-          pending.delete(key)
-          unpersisted.delete(key)
-          deferred.delete(key)
-          queued.delete(key)
-          const current = message.current as LiveFieldChange | null | undefined
-          if (current) {
-            const currentKey = fieldKey(current.resource, current.recordId, current.field, current.relations)
-            revisions.set(currentKey, Math.max(revisions.get(currentKey) ?? 0, current.revision))
-            apply(current, currentKey)
-          } else {
-            revisions.delete(key)
-            values.delete(key)
-          }
-          void refresh()
-          return
-        }
-        if (message.type === 'board_reset') {
-          revisions.clear()
-          values.clear()
-          pending.clear()
-          unpersisted.clear()
-          deferred.clear()
-          queued.clear()
-          void refresh()
-          return
-        }
-        if (message.type === 'structure_changed' || message.type === 'fields_reset') {
-          const targets = Array.isArray(message.targets)
-            ? message.targets
-            : [{ resource: message.resource, recordId: message.recordId }]
-          for (const target of targets) {
-            if (!target || typeof target !== 'object') continue
-            const item = target as Record<string, unknown>
-            if (typeof item.resource !== 'string' || typeof item.recordId !== 'number') continue
-            removeTarget({
-              resource: item.resource as BoardResource,
-              recordId: item.recordId,
-              field: typeof item.field === 'string' ? item.field : undefined,
-              relations: item.relations as LiveFieldRelations | undefined,
-            })
-          }
-          void refresh()
-        }
-      })
-      socket.addEventListener('close', () => {
-        for (const [key, edit] of unpersisted) {
-          pending.set(key, edit)
-          queued.set(key, edit.message)
-        }
-        ready = false
-        socket = null
-        scheduleReconnect()
-      })
-      socket.addEventListener('error', () => socket?.close())
-    } catch {
-      scheduleReconnect()
+      } else {
+        await boardService.update(board, change.resource, change.recordId, { [change.field]: change.value })
+      }
+      if (pending.get(key) === edit) pending.delete(key)
+      const held = deferred.get(key)
+      if (held && held.revision > change.revision) apply(held, key)
+      deferred.delete(key)
+    } catch (error) {
+      console.error(`Live field persistence failed for ${key}`, error)
+      if (pending.get(key) === edit) pending.delete(key)
+      deferred.delete(key)
+      void refresh()
+    }
+  }
+
+  function cancelMatching(predicate: (key: string) => boolean) {
+    for (const [key, edit] of pending) {
+      if (!predicate(key)) continue
+      clearTimeout(edit.timer)
+      pending.delete(key)
+    }
+    for (const collection of [revisions, values, deferred, queued]) {
+      for (const key of collection.keys()) if (predicate(key)) collection.delete(key)
     }
   }
 
   const context: LiveBoardContext = {
     edit(resource, recordId, field, value, relations) {
       const key = fieldKey(resource, recordId, field, relations)
+      const previous = pending.get(key)
+      if (previous) clearTimeout(previous.timer)
       const sequence = ++clientSeq
-      const message: Record<string, unknown> = {
-        type: 'field_edit',
-        board,
+      const change: LiveFieldChange = {
+        type: 'field_changed',
         resource,
         recordId,
         field,
         value,
+        revision: Date.now() * 1_000 + sequence % 1_000,
         clientId,
         clientSeq: sequence,
+        ...(relations ? { relations } : {}),
       }
-      if (relations) message.relations = relations
       values.set(key, value)
-      pending.set(key, { clientSeq: sequence, message })
-      unpersisted.set(key, {
-        clientSeq: sequence,
-        message,
-        resource,
-        field,
-        actualRecordId: recordId,
-      })
-      if (ready && socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
-      else queued.set(key, message)
+      revisions.set(key, change.revision)
+      const edit: PendingEdit = {
+        change,
+        timer: setTimeout(() => void persist(key, edit), 300),
+      }
+      pending.set(key, edit)
+      broadcast(change)
     },
     cancel(resource, recordId) {
-      const prefix = `${resource}:${recordId}:`
-      for (const collection of [revisions, values, pending, unpersisted, deferred, queued]) {
-        for (const key of collection.keys()) if (key.startsWith(prefix)) collection.delete(key)
-      }
+      cancelMatching((key) => key.startsWith(`${resource}:${recordId}:`))
     },
     getValue(resource, recordId, field, relations) {
       const key = fieldKey(resource, recordId, field, relations)
       if (values.has(key)) return values.get(key)
-      if (resource === 'md-cells' && recordId > 0 && relations) {
-        return values.get(`${resource}:${recordId}:${field}`)
-      }
+      if (resource === 'md-cells' && recordId > 0 && relations) return values.get(`${resource}:${recordId}:${field}`)
       return undefined
     },
     hasPending(resource, recordId, field, relations) {
@@ -359,13 +206,32 @@ export function provideLiveBoard(board: BoardKey, refresh: () => Promise<void> |
   }
 
   provide(liveBoardKey, context)
-  onMounted(() => void connect())
+  onMounted(async () => {
+    const { data } = await supabase.auth.getSession()
+    if (data.session?.access_token) await supabase.realtime.setAuth(data.session.access_token)
+    channel = supabase
+      .channel(`board:${board}:live`, { config: { private: true } })
+      .on('broadcast', { event: 'field_changed' }, (message) => processChange(message.payload as LiveFieldChange))
+      .subscribe((status, error) => {
+        if (status === 'SUBSCRIBED') {
+          ready = true
+          for (const change of queued.values()) broadcast(change)
+          queued.clear()
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          ready = false
+          console.error(`Live field subscription failed for ${board}`, error)
+        } else if (status === 'CLOSED') {
+          ready = false
+        }
+      })
+  })
   onUnmounted(() => {
-    stopped = true
     ready = false
-    if (reconnectTimer) clearTimeout(reconnectTimer)
-    socket?.close()
-    socket = null
+    for (const [key, edit] of pending) {
+      clearTimeout(edit.timer)
+      void persist(key, edit)
+    }
+    if (channel) void supabase.removeChannel(channel)
     handlers.clear()
   })
   return context
@@ -375,11 +241,6 @@ export function useLiveBoard() {
   return inject<LiveBoardContext | null>(liveBoardKey, null)
 }
 
-export function liveFieldKey(
-  resource: BoardResource,
-  recordId: number,
-  field: string,
-  relations?: LiveFieldRelations,
-) {
+export function liveFieldKey(resource: BoardResource, recordId: number, field: string, relations?: LiveFieldRelations) {
   return fieldKey(resource, recordId, field, relations)
 }
