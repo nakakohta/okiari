@@ -6,6 +6,24 @@ interface Env {
   SUPABASE_PUBLISHABLE_KEY?: string
 }
 
+const API_PATHS = [
+  '/auth/',
+  '/me',
+  '/stores',
+  '/products',
+  '/meal-reports',
+  '/drink-refills',
+  '/inventory-checks',
+  '/inventories',
+  '/boards/',
+  '/users',
+  '/roles',
+]
+
+function isApiRequest(pathname: string) {
+  return API_PATHS.some((path) => pathname === path || pathname.startsWith(path))
+}
+
 const SECURITY_HEADERS = {
   'X-Robots-Tag': 'noindex, nofollow, noarchive, nosnippet, noimageindex',
   'Referrer-Policy': 'no-referrer',
@@ -27,56 +45,28 @@ function secureResponse(response: Response) {
   })
 }
 
-function jsonResponse(body: unknown, status = 200) {
-  return secureResponse(Response.json(body, { status }))
-}
-
-function bearerToken(request: Request) {
-  const authorization = request.headers.get('Authorization') || ''
-  const match = authorization.match(/^Bearer\s+(.+)$/i)
-  return match?.[1] || ''
-}
-
-async function fetchCurrentUser(request: Request, env: Env) {
-  const accessToken = bearerToken(request)
-  if (!accessToken) {
-    return jsonResponse({ detail: 'Not authenticated' }, 401)
+async function proxyApiRequest(request: Request, env: Env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY) {
+    return Response.json({ detail: 'API service is not configured' }, { status: 503 })
   }
 
-  const supabaseUrl = env.SUPABASE_URL?.replace(/\/$/, '')
-  const publishableKey = env.SUPABASE_PUBLISHABLE_KEY
-  if (!supabaseUrl || !publishableKey) {
-    return jsonResponse({ detail: 'Authentication service is not configured' }, 503)
-  }
+  const sourceUrl = new URL(request.url)
+  const functionUrl = new URL(
+    `${env.SUPABASE_URL.replace(/\/$/, '')}/functions/v1/private-workspace-api${sourceUrl.pathname}`,
+  )
+  functionUrl.search = sourceUrl.search
 
-  const authResponse = await fetch(`${supabaseUrl}/functions/v1/private-workspace-auth-me`, {
-    headers: {
-      apikey: publishableKey,
-      Authorization: `Bearer ${accessToken}`,
-    },
-  })
-  const headers = new Headers(authResponse.headers)
-  headers.delete('set-cookie')
-  return secureResponse(new Response(authResponse.body, {
-    status: authResponse.status,
-    statusText: authResponse.statusText,
-    headers,
-  }))
+  const upstreamRequest = new Request(functionUrl, request)
+  upstreamRequest.headers.set('apikey', env.SUPABASE_PUBLISHABLE_KEY)
+  upstreamRequest.headers.delete('host')
+  return fetch(upstreamRequest)
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
-    if (request.method === 'GET' && url.pathname === '/auth/me') {
-      try {
-        return await fetchCurrentUser(request, env)
-      } catch {
-        return jsonResponse({ detail: 'Authentication service is temporarily unavailable' }, 503)
-      }
-    }
-
-    if (request.headers.has('Authorization')) {
-      return jsonResponse({ detail: 'Backend API is not configured for this deployment' }, 503)
+    if (isApiRequest(url.pathname)) {
+      return secureResponse(await proxyApiRequest(request, env))
     }
 
     const assetResponse = await env.ASSETS.fetch(request)
