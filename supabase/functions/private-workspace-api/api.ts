@@ -1,8 +1,9 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.108.2'
 
 export interface ApiEnv {
   SUPABASE_URL?: string
   SUPABASE_PUBLISHABLE_KEY?: string
+  SUPABASE_SECRET_KEYS?: string
   SUPABASE_SERVICE_ROLE_KEY?: string
   SUPABASE_SECRET_KEY?: string
 }
@@ -100,6 +101,16 @@ function bearerToken(request: Request) {
 }
 
 function serviceKey(env: ApiEnv) {
+  if (env.SUPABASE_SECRET_KEYS) {
+    try {
+      const keys = JSON.parse(env.SUPABASE_SECRET_KEYS) as Record<string, unknown>
+      const candidate = keys.default ?? Object.values(keys).find((value) => typeof value === 'string')
+      if (typeof candidate === 'string' && candidate) return candidate
+    } catch {
+      console.error('supabase_secret_keys_invalid')
+    }
+  }
+
   return env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY || ''
 }
 

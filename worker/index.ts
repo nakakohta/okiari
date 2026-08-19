@@ -1,9 +1,9 @@
-import { handleApiRequest, type ApiEnv } from './api'
-
-interface Env extends ApiEnv {
+interface Env {
   ASSETS: {
     fetch(request: Request): Promise<Response>
   }
+  SUPABASE_URL?: string
+  SUPABASE_PUBLISHABLE_KEY?: string
 }
 
 const API_PATHS = [
@@ -45,11 +45,28 @@ function secureResponse(response: Response) {
   })
 }
 
+async function proxyApiRequest(request: Request, env: Env) {
+  if (!env.SUPABASE_URL || !env.SUPABASE_PUBLISHABLE_KEY) {
+    return Response.json({ detail: 'API service is not configured' }, { status: 503 })
+  }
+
+  const sourceUrl = new URL(request.url)
+  const functionUrl = new URL(
+    `${env.SUPABASE_URL.replace(/\/$/, '')}/functions/v1/private-workspace-api${sourceUrl.pathname}`,
+  )
+  functionUrl.search = sourceUrl.search
+
+  const upstreamRequest = new Request(functionUrl, request)
+  upstreamRequest.headers.set('apikey', env.SUPABASE_PUBLISHABLE_KEY)
+  upstreamRequest.headers.delete('host')
+  return fetch(upstreamRequest)
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
     if (isApiRequest(url.pathname)) {
-      return secureResponse(await handleApiRequest(request, env))
+      return secureResponse(await proxyApiRequest(request, env))
     }
 
     const assetResponse = await env.ASSETS.fetch(request)
