@@ -1,6 +1,7 @@
 import axios from 'axios'
 import type { InternalAxiosRequestConfig } from 'axios'
 import { supabase } from '@/lib/supabase'
+import { apiBaseUrl } from '@/lib/apiBase'
 
 type RetriableRequest = InternalAxiosRequestConfig & { _authRetry?: boolean }
 let refreshPromise: ReturnType<typeof supabase.auth.refreshSession> | null = null
@@ -15,7 +16,7 @@ async function refreshSessionOnce() {
 }
 
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:18000',
+  baseURL: apiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },

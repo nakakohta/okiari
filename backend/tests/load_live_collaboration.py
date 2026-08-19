@@ -35,47 +35,48 @@ def percentile(values: list[float], percentage: float) -> float:
     return ordered[index]
 
 
-async def run(duration: float, edits_per_second: int) -> None:
+async def run(
+    duration: float,
+    connections_count: int,
+    editors_count: int,
+    edits_per_editor_second: int,
+) -> None:
+    if editors_count > connections_count:
+        raise ValueError("editors cannot exceed connections")
     manager = LiveCollaborationManager()
     manager._next_revision[1] = 7_000_000_000
     manager._schedule_live_persist = lambda _live: None
     manager._schedule_canonical = lambda _board, _live: None
     starts: dict[int, float] = {}
     latencies: list[float] = []
-    room_sizes = {
-        "drink-refill": 20,
-        "meal-drink": 10,
-        "meal-food": 10,
-        "inventory": 10,
-    }
     editors: list[Connection] = []
     sequences: defaultdict[str, int] = defaultdict(int)
 
-    for board, size in room_sizes.items():
-        connections: set[Connection] = set()
-        for index in range(size):
-            user_id = f"00000000-0000-0000-{len(connections):04d}-{index:012d}"
-            user = CurrentUser(
-                auth_user_id=user_id,
-                profile={"is_active": True},
-                role={"code": "leader"},
-            )
-            connection = Connection(ProbeWebSocket(starts, latencies), user)
-            connections.add(connection)
-            if board == "drink-refill" and len(editors) < 5:
-                editors.append(connection)
-                manager._authorization_cache[(
-                    user_id,
-                    "drink-refill",
-                    "d-rows",
-                    10,
-                    "item_name",
-                    None,
-                    None,
-                )] = (float("inf"), 1, 10)
-        manager._connections[board] = connections
+    connections: set[Connection] = set()
+    for index in range(connections_count):
+        user_id = f"00000000-0000-0000-0000-{index:012d}"
+        user = CurrentUser(
+            auth_user_id=user_id,
+            profile={"is_active": True},
+            role={"code": "leader"},
+        )
+        connection = Connection(ProbeWebSocket(starts, latencies), user)
+        connections.add(connection)
+        if len(editors) < editors_count:
+            editors.append(connection)
+            manager._authorization_cache[(
+                user_id,
+                "drink-refill",
+                "d-rows",
+                10,
+                "item_name",
+                None,
+                None,
+            )] = (float("inf"), 1, 10)
+    manager._connections["drink-refill"] = connections
 
-    burst_interval = len(editors) / edits_per_second
+    edits_per_second = editors_count * edits_per_editor_second
+    burst_interval = 1 / edits_per_editor_second
     started_at = time.perf_counter()
     deadline = started_at + duration
     next_burst = started_at
@@ -105,12 +106,12 @@ async def run(duration: float, edits_per_second: int) -> None:
         sent += len(editors)
         next_burst += burst_interval
 
-    expected_deliveries = sent * room_sizes["drink-refill"]
+    expected_deliveries = sent * connections_count
     delivered = len(latencies)
     p95_ms = percentile(latencies, 0.95) * 1000
     actual_rate = sent / duration
     print(
-        f"connections={sum(room_sizes.values())} editors=5 sent={sent} "
+        f"connections={connections_count} editors={editors_count} sent={sent} "
         f"delivered={delivered}/{expected_deliveries} rate={actual_rate:.1f}/s p95_ms={p95_ms:.2f}"
     )
     if delivered != expected_deliveries:
@@ -124,6 +125,13 @@ async def run(duration: float, edits_per_second: int) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration", type=float, default=300)
-    parser.add_argument("--edits-per-second", type=int, default=50)
+    parser.add_argument("--connections", type=int, default=50)
+    parser.add_argument("--editors", type=int, default=20)
+    parser.add_argument("--edits-per-editor-second", type=int, default=10)
     args = parser.parse_args()
-    asyncio.run(run(args.duration, args.edits_per_second))
+    asyncio.run(run(
+        args.duration,
+        args.connections,
+        args.editors,
+        args.edits_per_editor_second,
+    ))

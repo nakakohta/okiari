@@ -1,6 +1,7 @@
 import { inject, nextTick, onMounted, onUnmounted, provide, shallowRef } from 'vue'
 import type { ShallowRef } from 'vue'
 import { boardService, type BoardKey, type BoardResource } from '@/lib/services'
+import { boardWebSocketUrl } from '@/lib/apiBase'
 
 export interface LiveFieldRelations {
   row_id?: number
@@ -71,15 +72,6 @@ function fieldKey(
     return `${resource}:${relations.row_id}:${relations.column_id}:${field}`
   }
   return `${resource}:${recordId}:${field}`
-}
-
-function websocketUrl(board: BoardKey) {
-  const apiBase = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:18000'
-  const url = new URL(apiBase, window.location.origin)
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-  url.pathname = `${url.pathname.replace(/\/$/, '')}/ws/boards/${board}`
-  url.search = ''
-  return url.toString()
 }
 
 function transformedPosition(position: number, before: string, after: string) {
@@ -218,7 +210,7 @@ export function provideLiveBoard(board: BoardKey, refresh: () => Promise<void> |
     try {
       const { ticket } = await boardService.collaborationTicket(board)
       if (stopped) return
-      socket = new WebSocket(websocketUrl(board))
+      socket = new WebSocket(boardWebSocketUrl(board))
       socket.addEventListener('open', () => {
         socket?.send(JSON.stringify({ type: 'authenticate', ticket }))
       })

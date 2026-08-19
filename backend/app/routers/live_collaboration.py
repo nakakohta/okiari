@@ -32,7 +32,7 @@ from app.routers.collaborative import (
 from app.supabase_client import supabase
 
 router = APIRouter(tags=["live collaboration"])
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 TICKET_TTL_SECONDS = 60
 AUTH_RECHECK_SECONDS = 60
@@ -272,6 +272,11 @@ class LiveCollaborationManager:
         self._loop = asyncio.get_running_loop()
         board_id = await self._load_board(board_key)
         self._connections.setdefault(board_key, set()).add(connection)
+        logger.info(
+            "Collaboration room connected board=%s connections=%s",
+            board_key,
+            len(self._connections[board_key]),
+        )
         values = [item.message() for item in self._values.values() if item.board_id == board_id]
         await connection.websocket.send_json({"type": "sync", "values": values})
 
@@ -279,6 +284,11 @@ class LiveCollaborationManager:
         connections = self._connections.get(board_key)
         if connections:
             connections.discard(connection)
+            logger.info(
+                "Collaboration room disconnected board=%s connections=%s",
+                board_key,
+                len(connections),
+            )
             if not connections:
                 self._connections.pop(board_key, None)
 
