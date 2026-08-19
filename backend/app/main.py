@@ -4,9 +4,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
 from app.routers import auth, collaborative, live_collaboration, masters, reports, roles, users
-from app.supabase_client import supabase
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-app = FastAPI()
+
+@app.middleware("http")
+async def prevent_indexing(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Robots-Tag"] = "noindex, nofollow, noarchive, nosnippet, noimageindex"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 def _cors_origins() -> list[str]:
@@ -49,8 +56,3 @@ def read_root():
 def health_check():
     return {"status": "ok"}
 
-
-@app.get("/test-reports")
-def get_test_reports():
-    response = supabase.table("test_reports").select("*").execute()
-    return response.data
