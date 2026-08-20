@@ -91,6 +91,9 @@ const PRODUCT_SELECT = 'id,name,category,unit,is_active,created_at,updated_at'
 const REPORT_STORE_SELECT = 'id,name,store_type,is_active,created_at,updated_at'
 const REPORT_PRODUCT_SELECT = 'id,name,category,unit,is_active,created_at,updated_at'
 const REPORT_USER_SELECT = 'id,display_name,email'
+const USER_SELECT = 'id,display_name,email,role_id,is_active,created_at,updated_at,role:app_roles(id,code,name,description,created_at)'
+const ROLE_SELECT = 'id,code,name,description,created_at'
+const BASIC_ROLE_CODES = new Set(['admin', 'leader', 'sub_leader', 'viewer'])
 const MEAL_SELECT = `id,report_date,store_id,product_id,quantity,reported_by,note,created_at,updated_at,store:stores(${REPORT_STORE_SELECT}),product:products(${REPORT_PRODUCT_SELECT}),reporter:app_users!meal_reports_reported_by_fkey(${REPORT_USER_SELECT})`
 const RESTOCK_SELECT = `id,requested_at,completed_at,store_id,product_id,quantity,status,requested_by,completed_by,note,created_at,updated_at,store:stores(${REPORT_STORE_SELECT}),product:products(${REPORT_PRODUCT_SELECT}),requested_by_user:app_users!restock_reports_requested_by_fkey(${REPORT_USER_SELECT}),completed_by_user:app_users!restock_reports_completed_by_fkey(${REPORT_USER_SELECT})`
 const INVENTORY_CHECK_SELECT = `id,check_date,store_id,product_id,expected_quantity,actual_quantity,difference,checked_by,is_confirmed,note,created_at,updated_at,store:stores(${REPORT_STORE_SELECT}),product:products(${REPORT_PRODUCT_SELECT}),checker:app_users!inventory_checks_checked_by_fkey(${REPORT_USER_SELECT})`
@@ -553,6 +556,233 @@ async function upsertMealReport(context: AuthContext, request: Request) {
   return ensureResult(result.data as JsonRecord | null, result.error, 'Meal report could not be saved')
 }
 
+function requiredString(value: unknown, field: string, maxLength: number) {
+  if (typeof value !== 'string') throw new ApiError(400, `${field} is required`)
+  const normalized = value.trim()
+  if (!normalized || normalized.length > maxLength) throw new ApiError(400, `${field} is invalid`)
+  return normalized
+}
+
+function requiredInteger(value: unknown, field: string) {
+  if (!Number.isInteger(value) || Number(value) <= 0) throw new ApiError(400, `${field} is invalid`)
+  return Number(value)
+}
+
+function requiredBoolean(value: unknown, field: string) {
+  if (typeof value !== 'boolean') throw new ApiError(400, `${field} is invalid`)
+  return value
+}
+
+function validEmail(value: unknown) {
+  const email = requiredString(value, 'email', 320).toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError(400, 'email is invalid')
+  return email
+}
+
+function optionalDescription(payload: JsonRecord) {
+  if (!Object.prototype.hasOwnProperty.call(payload, 'description')) return undefined
+  if (payload.description === null) return null
+  if (typeof payload.description !== 'string') throw new ApiError(400, 'description is invalid')
+  return payload.description.trim() || null
+}
+
+async function requireRoleRecord(context: AuthContext, roleId: number) {
+  const result = await context.client.from('app_roles').select(ROLE_SELECT).eq('id', roleId).maybeSingle()
+  return ensureResult(result.data as JsonRecord | null, result.error, 'Role not found')
+}
+
+async function requireUserRecord(context: AuthContext, userId: string) {
+  const result = await context.client.from('app_users').select(USER_SELECT).eq('id', userId).maybeSingle()
+  return ensureResult(result.data as JsonRecord | null, result.error, 'User not found')
+}
+
+async function writeAudit(
+  context: AuthContext,
+  targetTable: 'app_users' | 'app_roles',
+  targetId: string,
+  action: string,
+  before: JsonRecord | null,
+  after: JsonRecord | null,
+) {
+  const result = await context.client.from('audit_logs').insert({
+    user_id: context.userId,
+    target_table: targetTable,
+    target_id: targetId,
+    action,
+    before_data: before,
+    after_data: after,
+    created_at: now(),
+  })
+  if (result.error) {
+    console.error('Audit log could not be written', result.error.message)
+    throw new ApiError(502, 'Audit log could not be written')
+  }
+}
+
+async function ensureUniqueEmail(context: AuthContext, email: string) {
+  const result = await context.client.from('app_users').select('id').ilike('email', email).limit(1)
+  if (result.error) throw new ApiError(502, 'User email could not be checked')
+  if ((result.data || []).length) throw new ApiError(409, 'User email already exists')
+}
+
+async function ensureUniqueRoleCode(context: AuthContext, code: string, excludeId?: number) {
+  let query = context.client.from('app_roles').select('id').eq('code', code)
+  if (excludeId) query = query.neq('id', excludeId)
+  const result = await query.limit(1)
+  if (result.error) throw new ApiError(502, 'Role code could not be checked')
+  if ((result.data || []).length) throw new ApiError(409, 'Role code already exists')
+}
+
+async function readUsers(context: AuthContext) {
+  requireRoles(context, 'admin')
+  const result = await context.client.from('app_users').select(USER_SELECT).order('created_at', { ascending: false })
+  return ensureResult(result.data as JsonRecord[] | null, result.error, 'Users could not be loaded')
+}
+
+async function createUser(context: AuthContext, request: Request) {
+  requireRoles(context, 'admin')
+  const payload = await body(request)
+  const displayName = requiredString(payload.display_name, 'display_name', 255)
+  const email = validEmail(payload.email)
+  const password = requiredString(payload.password, 'password', 128)
+  if (password.length < 8) throw new ApiError(400, 'password must contain at least 8 characters')
+  const roleId = requiredInteger(payload.role_id, 'role_id')
+  const isActive = requiredBoolean(payload.is_active, 'is_active')
+  await Promise.all([requireRoleRecord(context, roleId), ensureUniqueEmail(context, email)])
+
+  const authResult = await context.client.auth.admin.createUser({ email, password, email_confirm: true })
+  if (authResult.error || !authResult.data.user?.id) {
+    console.error('Auth user could not be created', authResult.error?.message)
+    throw new ApiError(authResult.error?.status === 422 ? 409 : 502, 'Auth user could not be created')
+  }
+
+  const userId = authResult.data.user.id
+  const result = await context.client.from('app_users').insert({
+    id: userId,
+    display_name: displayName,
+    email,
+    role_id: roleId,
+    is_active: isActive,
+  }).select(USER_SELECT).single()
+
+  if (result.error || !result.data) {
+    const cleanup = await context.client.auth.admin.deleteUser(userId)
+    if (cleanup.error) console.error('Auth user rollback failed', cleanup.error.message)
+    console.error('App user could not be created', result.error?.message)
+    throw new ApiError(502, 'User could not be created')
+  }
+
+  const created = result.data as JsonRecord
+  await writeAudit(context, 'app_users', userId, 'create', null, created)
+  return created
+}
+
+async function activeAdminCount(context: AuthContext) {
+  const adminRole = await context.client.from('app_roles').select('id').eq('code', 'admin').maybeSingle()
+  if (adminRole.error || !adminRole.data) throw new ApiError(502, 'Admin role could not be loaded')
+  const result = await context.client.from('app_users')
+    .select('id', { count: 'exact', head: true })
+    .eq('role_id', adminRole.data.id)
+    .eq('is_active', true)
+  if (result.error) throw new ApiError(502, 'Admin users could not be counted')
+  return result.count || 0
+}
+
+function userRoleCode(user: JsonRecord) {
+  const roleValue = user.role as JsonRecord | JsonRecord[] | null
+  const role = Array.isArray(roleValue) ? roleValue[0] : roleValue
+  return String(role?.code || '')
+}
+
+async function updateUserRole(context: AuthContext, userId: string, request: Request) {
+  requireRoles(context, 'admin')
+  const payload = await body(request)
+  const roleId = requiredInteger(payload.role_id, 'role_id')
+  const [before, newRole] = await Promise.all([
+    requireUserRecord(context, userId),
+    requireRoleRecord(context, roleId),
+  ])
+  if (before.is_active === true && userRoleCode(before) === 'admin' && newRole.code !== 'admin' && await activeAdminCount(context) <= 1) {
+    throw new ApiError(409, 'Cannot remove the last active admin user')
+  }
+  const result = await context.client.from('app_users')
+    .update({ role_id: roleId, updated_at: now() })
+    .eq('id', userId).select(USER_SELECT).single()
+  const updated = ensureResult(result.data as JsonRecord | null, result.error, 'User role could not be updated')
+  await writeAudit(context, 'app_users', userId, 'change_role', before, updated)
+  return updated
+}
+
+async function updateUserStatus(context: AuthContext, userId: string, request: Request) {
+  requireRoles(context, 'admin')
+  const payload = await body(request)
+  const isActive = requiredBoolean(payload.is_active, 'is_active')
+  const before = await requireUserRecord(context, userId)
+  if (!isActive && before.is_active === true && userRoleCode(before) === 'admin' && await activeAdminCount(context) <= 1) {
+    throw new ApiError(409, 'Cannot deactivate the last active admin user')
+  }
+  const result = await context.client.from('app_users')
+    .update({ is_active: isActive, updated_at: now() })
+    .eq('id', userId).select(USER_SELECT).single()
+  const updated = ensureResult(result.data as JsonRecord | null, result.error, 'User status could not be updated')
+  await writeAudit(context, 'app_users', userId, 'change_status', before, updated)
+  return updated
+}
+
+async function readRoles(context: AuthContext) {
+  requireRoles(context, 'admin', 'leader')
+  const result = await context.client.from('app_roles').select(ROLE_SELECT).order('created_at', { ascending: false })
+  return ensureResult(result.data as JsonRecord[] | null, result.error, 'Roles could not be loaded')
+}
+
+async function createRole(context: AuthContext, request: Request) {
+  requireRoles(context, 'admin')
+  const payload = await body(request)
+  const code = requiredString(payload.code, 'code', 64)
+  const name = requiredString(payload.name, 'name', 255)
+  const description = optionalDescription(payload) ?? null
+  await ensureUniqueRoleCode(context, code)
+  const result = await context.client.from('app_roles')
+    .insert({ code, name, description }).select(ROLE_SELECT).single()
+  const created = ensureResult(result.data as JsonRecord | null, result.error, 'Role could not be created')
+  await writeAudit(context, 'app_roles', String(created.id), 'create', null, created)
+  return created
+}
+
+async function updateRole(context: AuthContext, roleId: number, request: Request) {
+  requireRoles(context, 'admin')
+  const payload = await body(request)
+  const before = await requireRoleRecord(context, roleId)
+  const updates: JsonRecord = {}
+  if (Object.prototype.hasOwnProperty.call(payload, 'code')) updates.code = requiredString(payload.code, 'code', 64)
+  if (Object.prototype.hasOwnProperty.call(payload, 'name')) updates.name = requiredString(payload.name, 'name', 255)
+  const description = optionalDescription(payload)
+  if (description !== undefined) updates.description = description
+  if (!Object.keys(updates).length) return before
+  if (BASIC_ROLE_CODES.has(String(before.code)) && updates.code && updates.code !== before.code) {
+    throw new ApiError(409, 'Basic role code cannot be changed')
+  }
+  if (typeof updates.code === 'string') await ensureUniqueRoleCode(context, updates.code, roleId)
+  const result = await context.client.from('app_roles')
+    .update(updates).eq('id', roleId).select(ROLE_SELECT).single()
+  const updated = ensureResult(result.data as JsonRecord | null, result.error, 'Role could not be updated')
+  await writeAudit(context, 'app_roles', String(roleId), 'update', before, updated)
+  return updated
+}
+
+async function deleteRole(context: AuthContext, roleId: number) {
+  requireRoles(context, 'admin')
+  const before = await requireRoleRecord(context, roleId)
+  if (BASIC_ROLE_CODES.has(String(before.code))) throw new ApiError(409, 'Basic roles cannot be deleted')
+  const references = await context.client.from('app_users').select('id', { count: 'exact', head: true }).eq('role_id', roleId)
+  if (references.error) throw new ApiError(502, 'Role references could not be checked')
+  if ((references.count || 0) > 0) throw new ApiError(409, 'Role is referenced by app_users')
+  const result = await context.client.from('app_roles').delete().eq('id', roleId)
+  if (result.error) throw new ApiError(502, 'Role could not be deleted')
+  await writeAudit(context, 'app_roles', String(roleId), 'delete', before, null)
+  return { ok: true }
+}
+
 async function route(context: AuthContext, request: Request, url: URL): Promise<unknown> {
   const { pathname } = url
   if ((pathname === '/auth/me' || pathname === '/me') && request.method === 'GET') {
@@ -569,6 +799,19 @@ async function route(context: AuthContext, request: Request, url: URL): Promise<
     const result = await query.order('category').order('name')
     return ensureResult(result.data as JsonRecord[] | null, result.error, 'Products could not be loaded')
   }
+
+  if (pathname === '/users' && request.method === 'GET') return readUsers(context)
+  if (pathname === '/users' && request.method === 'POST') return createUser(context, request)
+  const userRole = pathname.match(/^\/users\/([0-9a-f-]+)\/role$/i)
+  if (userRole && request.method === 'PATCH') return updateUserRole(context, userRole[1], request)
+  const userStatus = pathname.match(/^\/users\/([0-9a-f-]+)\/status$/i)
+  if (userStatus && request.method === 'PATCH') return updateUserStatus(context, userStatus[1], request)
+
+  if (pathname === '/roles' && request.method === 'GET') return readRoles(context)
+  if (pathname === '/roles' && request.method === 'POST') return createRole(context, request)
+  const role = pathname.match(/^\/roles\/(\d+)$/)
+  if (role && request.method === 'PATCH') return updateRole(context, Number(role[1]), request)
+  if (role && request.method === 'DELETE') return deleteRole(context, Number(role[1]))
 
   if (pathname === '/meal-reports' && request.method === 'GET') return readReports(context, 'meal_reports', MEAL_SELECT, 'report_date', url)
   if (pathname === '/meal-reports' && request.method === 'POST') return createReport(context, 'meal_reports', MEAL_SELECT, request, 'meal')
