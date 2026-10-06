@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import { compareBoardOrder, nextBoardOrder } from '@/lib/boardOrder'
+import { readInputValue } from '@/lib/liveInput'
 import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
 import {
   createAutosaveQueue,
@@ -31,9 +33,10 @@ const autosave = createAutosaveQueue()
 const composing = new Set<string>()
 const live = useLiveBoard()
 
+const sortedRows = computed(() => [...localRows.value].sort(compareBoardOrder))
 const visibleRows = computed(() => prepareMode.value
-  ? localRows.value.filter((row) => row.status !== 'completed')
-  : localRows.value)
+  ? sortedRows.value.filter((row) => row.status !== 'completed')
+  : sortedRows.value)
 
 watch(() => props.rows, (rows) => {
   localRows.value = rows.map((incoming) => {
@@ -68,9 +71,13 @@ function togglePrepareMode() {
     : '興行日モードに戻りました。')
 }
 
-function schedule(row: DTableRow, field: EditableField) {
+function schedule(row: DTableRow, field: EditableField, event?: Event) {
   const key = `${row.id}:${field}`
-  if (composing.has(key)) return
+  if (event) row[field] = readInputValue(event) as never
+  if (composing.has(key)) {
+    live?.preview('d-rows', row.id, field, row[field])
+    return
+  }
   if (live) {
     live.edit('d-rows', row.id, field, row[field])
     return
@@ -88,18 +95,18 @@ function schedule(row: DTableRow, field: EditableField) {
 }
 
 function save(row: DTableRow, field: EditableField) {
-  if (live) return
+  if (live) { live.flush('d-rows', row.id, field); return }
   const key = `${row.id}:${field}`
   if (!autosave.has(key)) schedule(row, field)
   autosave.flush(key)
 }
 
-function composition(row: DTableRow, field: EditableField, active: boolean) {
+function composition(row: DTableRow, field: EditableField, active: boolean, event?: Event) {
   const key = `${row.id}:${field}`
-  if (active) composing.add(key)
+  if (active) { composing.add(key); live?.beginComposition('d-rows', row.id, field) }
   else {
     composing.delete(key)
-    schedule(row, field)
+    schedule(row, field, event)
   }
 }
 
@@ -117,7 +124,7 @@ async function addRow() {
   try {
     await boardService.create('drink-refill', 'd-rows', {
       store_id: props.storeId, scope: props.scope, item_name: '', max_quantity: 0,
-      requested_quantity: 0, note: '', status: 'pending', sort_order: localRows.value.length,
+      requested_quantity: 0, note: '', status: 'pending', sort_order: nextBoardOrder(localRows.value),
     })
     emit('refresh')
   } catch { emit('error', '行を追加できませんでした。') }
@@ -189,10 +196,10 @@ const unsubscribeLive = live?.subscribe((change) => {
             <td><button class="status" :class="row.status" :disabled="!editable('status')" @click="selected = row">
               {{ row.status === 'pending' ? '未補充' : row.status === 'out_of_stock' ? '在庫無い為未補充' : '完了' }}
             </button></td>
-            <td><input v-model="row.item_name" :data-live-field="liveFieldKey('d-rows',row.id,'item_name')" :disabled="!editable('name')" @input="schedule(row,'item_name')" @blur="save(row,'item_name')" @compositionstart="composition(row,'item_name',true)" @compositionend="composition(row,'item_name',false)" /></td>
-            <td><input v-model.number="row.max_quantity" :data-live-field="liveFieldKey('d-rows',row.id,'max_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('max_quantity')" @input="schedule(row,'max_quantity')" @blur="save(row,'max_quantity')" /></td>
-            <td><input v-model.number="row.requested_quantity" :data-live-field="liveFieldKey('d-rows',row.id,'requested_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('requested_quantity')" @input="schedule(row,'requested_quantity')" @blur="save(row,'requested_quantity')" /></td>
-            <td><input v-model="row.note" :data-live-field="liveFieldKey('d-rows',row.id,'note')" :disabled="!editable('note')" @input="schedule(row,'note')" @blur="save(row,'note')" @compositionstart="composition(row,'note',true)" @compositionend="composition(row,'note',false)" /></td>
+            <td><input v-model="row.item_name" :data-live-field="liveFieldKey('d-rows',row.id,'item_name')" :disabled="!editable('name')" @input="schedule(row,'item_name',$event)" @blur="save(row,'item_name')" @compositionstart="composition(row,'item_name',true)" @compositionend="composition(row,'item_name',false,$event)" /></td>
+            <td><input v-model.number="row.max_quantity" :data-live-field="liveFieldKey('d-rows',row.id,'max_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('max_quantity')" @input="schedule(row,'max_quantity',$event)" @blur="save(row,'max_quantity')" /></td>
+            <td><input v-model.number="row.requested_quantity" :data-live-field="liveFieldKey('d-rows',row.id,'requested_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('requested_quantity')" @input="schedule(row,'requested_quantity',$event)" @blur="save(row,'requested_quantity')" /></td>
+            <td><input v-model="row.note" :data-live-field="liveFieldKey('d-rows',row.id,'note')" :disabled="!editable('note')" @input="schedule(row,'note',$event)" @blur="save(row,'note')" @compositionstart="composition(row,'note',true)" @compositionend="composition(row,'note',false,$event)" /></td>
             <td v-if="canDelete"><button class="delete" @click="removeRow(row)">削除</button></td>
           </tr>
         </tbody>

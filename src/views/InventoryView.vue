@@ -24,9 +24,9 @@ async function load(silent = false) {
   } catch { errorMessage.value = '棚卸表を取得できませんでした。' }
   finally { if (!silent) loading.value = false }
 }
-provideLiveBoard('inventory', () => load(true))
+const live = provideLiveBoard('inventory', () => load(true))
 const { realtimeState } = useRealtimeBoard('inventory', () => load(true), (change) => (
-  data.value ? mergeBoardChange(data.value as InventoryBoardData & Record<string, unknown>, change) : false
+  data.value ? mergeBoardChange(data.value as InventoryBoardData & Record<string, unknown>, change, live.reconcile) : false
 ))
 onMounted(load)
 </script>

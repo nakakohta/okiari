@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import { compareBoardOrder, nextBoardOrder } from '@/lib/boardOrder'
+import { readInputValue } from '@/lib/liveInput'
 import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
 import {
   createAutosaveQueue,
@@ -24,7 +26,7 @@ const autosave = createAutosaveQueue()
 const composing = new Set<string>()
 const live = useLiveBoard()
 
-const sortedRows = computed(() => [...localRows.value].sort((a, b) => a.sort_order - b.sort_order))
+const sortedRows = computed(() => [...localRows.value].sort(compareBoardOrder))
 watch(() => props.rows, (rows) => {
   localRows.value = rows.map((incoming) => {
     const current = localRows.value.find((row) => row.id === incoming.id)
@@ -44,13 +46,15 @@ function storeName(id: number) { return props.stores.find((store) => store.id ==
 function productName(id: number) { return props.products.find((product) => product.id === id)?.name ?? '-' }
 function unit(id: number) { return props.products.find((product) => product.id === id)?.unit ?? '' }
 
-function schedule(row: MTableRow, field: Field) {
+function schedule(row: MTableRow, field: Field, event?: Event) {
   const timerKey = `${row.id}:${field}`
-  if (composing.has(timerKey)) return
+  if (event) row[field] = readInputValue(event) as never
   if (live && ['expected_quantity', 'actual_quantity', 'note'].includes(field)) {
-    live.edit('m-rows', row.id, field, row[field])
+    const update = composing.has(timerKey) ? live.preview : live.edit
+    update('m-rows', row.id, field, row[field])
     return
   }
+  if (composing.has(timerKey)) return
   autosave.schedule(timerKey, async () => {
     if (field === 'expected_quantity' || field === 'actual_quantity') {
       row[field] = normalizePostgresInteger(row[field])
@@ -63,7 +67,7 @@ function schedule(row: MTableRow, field: Field) {
   })
 }
 function save(row: MTableRow, field: Field) {
-  if (live && ['expected_quantity', 'actual_quantity', 'note'].includes(field)) return
+  if (live && ['expected_quantity', 'actual_quantity', 'note'].includes(field)) { live.flush('m-rows', row.id, field); return }
   const timerKey = `${row.id}:${field}`
   if (!autosave.has(timerKey)) schedule(row, field)
   autosave.flush(timerKey)
@@ -72,7 +76,7 @@ async function addRow() {
   const store = props.stores.find((item) => item.is_active && props.canEditStore(item.id))
   const product = props.products.find((item) => item.is_active)
   if (!store || !product) { emit('error', '追加に必要な売店または商品がありません。'); return }
-  try { await boardService.create('inventory', 'm-rows', { store_id: store.id, product_id: product.id, expected_quantity: 0, actual_quantity: 0, note: '', is_confirmed: false, sort_order: localRows.value.length }); emit('refresh') }
+  try { await boardService.create('inventory', 'm-rows', { store_id: store.id, product_id: product.id, expected_quantity: 0, actual_quantity: 0, note: '', is_confirmed: false, sort_order: nextBoardOrder(localRows.value) }); emit('refresh') }
   catch { emit('error', '棚卸行を追加できませんでした。') }
 }
 async function confirmRow(row: MTableRow) {
@@ -114,11 +118,11 @@ const unsubscribeLive = live?.subscribe((change) => {
       <tbody><tr v-for="row in sortedRows" :key="row.id" :class="{ confirmed: row.is_confirmed }">
         <td><select v-model="row.store_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'store_id')"><option v-for="store in stores.filter(item => item.is_active && canEditStore(item.id))" :key="store.id" :value="store.id">{{ store.name }}</option></select><span class="print">{{ storeName(row.store_id) }}</span></td>
         <td><select v-model="row.product_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'product_id')"><option v-for="product in products.filter(item => item.is_active)" :key="product.id" :value="product.id">{{ product.name }}</option></select><span class="print">{{ productName(row.product_id) }}</span></td>
-        <td><div class="quantity"><input v-model.number="row.expected_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'expected_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'expected_quantity')" @blur="save(row,'expected_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
-        <td><div class="quantity"><input v-model.number="row.actual_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'actual_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'actual_quantity')" @blur="save(row,'actual_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td><div class="quantity"><input v-model.number="row.expected_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'expected_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'expected_quantity',$event)" @blur="save(row,'expected_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td><div class="quantity"><input v-model.number="row.actual_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'actual_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'actual_quantity',$event)" @blur="save(row,'actual_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
         <td :class="{ negative: row.actual_quantity-row.expected_quantity < 0, positive: row.actual_quantity-row.expected_quantity > 0 }">{{ row.actual_quantity - row.expected_quantity }}</td>
         <td><button class="confirm" :class="{ active: row.is_confirmed }" :disabled="!canConfirm" @click="confirmRow(row)">{{ row.is_confirmed ? '確定済み' : '未確定' }}</button></td>
-        <td><input v-model="row.note" :data-live-field="liveFieldKey('m-rows',row.id,'note')" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'note')" @blur="save(row,'note')" @compositionstart="composing.add(`${row.id}:note`)" @compositionend="composing.delete(`${row.id}:note`);schedule(row,'note')" /></td>
+        <td><input v-model="row.note" :data-live-field="liveFieldKey('m-rows',row.id,'note')" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'note',$event)" @blur="save(row,'note')" @compositionstart="composing.add(`${row.id}:note`);live?.beginComposition('m-rows',row.id,'note')" @compositionend="composing.delete(`${row.id}:note`);schedule(row,'note',$event)" /></td>
         <td v-if="canDelete"><button class="delete" @click="removeRow(row)">削除</button></td>
       </tr></tbody>
     </table></div>

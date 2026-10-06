@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import { compareBoardOrder, moveBoardRecord, nextBoardOrder } from '@/lib/boardOrder'
+import { readInputValue } from '@/lib/liveInput'
 import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
 import {
   createAutosaveQueue,
@@ -28,8 +30,8 @@ const autosave = createAutosaveQueue()
 const composing = new Set<string>()
 const live = useLiveBoard()
 
-const sortedRows = computed(() => [...localRows.value].sort((a, b) => a.sort_order - b.sort_order))
-function containersFor(rowId: number) { return localContainers.value.filter((item) => item.row_id === rowId).sort((a, b) => a.sort_order - b.sort_order) }
+const sortedRows = computed(() => [...localRows.value].sort(compareBoardOrder))
+function containersFor(rowId: number) { return localContainers.value.filter((item) => item.row_id === rowId).sort(compareBoardOrder) }
 
 watch(() => props.rows, (rows) => {
   localRows.value = rows.map((incoming) => {
@@ -56,13 +58,19 @@ watch(() => props.containers, (containers) => {
   })
 }, { immediate: true, deep: true })
 
-function schedule(resource: 'mf-rows' | 'mf-containers', id: number, field: RowField | ContainerField, value: unknown) {
+function schedule(resource: 'mf-rows' | 'mf-containers', id: number, field: RowField | ContainerField, value: unknown, event?: Event) {
   const timerKey = `${resource}:${id}:${field}`
-  if (composing.has(timerKey)) return
+  if (event) {
+    value = readInputValue(event)
+    const record = resource === 'mf-rows' ? localRows.value.find(row => row.id === id) : localContainers.value.find(container => container.id === id)
+    if (record) (record as unknown as Record<string, unknown>)[field] = value
+  }
   if (live) {
-    live.edit(resource, id, field, value)
+    const update = composing.has(timerKey) || (event as InputEvent | undefined)?.isComposing ? live.preview : live.edit
+    update(resource, id, field, value)
     return
   }
+  if (composing.has(timerKey)) return
   autosave.schedule(timerKey, async () => {
     const normalized = field === 'quantity' ? normalizePostgresInteger(value) : value
     await boardService.update('meal-food', resource, id, { [field]: normalized })
@@ -74,7 +82,7 @@ function schedule(resource: 'mf-rows' | 'mf-containers', id: number, field: RowF
 }
 
 function save(resource: 'mf-rows' | 'mf-containers', id: number, field: RowField | ContainerField, value: unknown) {
-  if (live) return
+  if (live) { live.flush(resource, id, field); return }
   const timerKey = `${resource}:${id}:${field}`
   if (!autosave.has(timerKey)) schedule(resource, id, field, value)
   autosave.flush(timerKey)
@@ -82,14 +90,14 @@ function save(resource: 'mf-rows' | 'mf-containers', id: number, field: RowField
 
 async function addRow() {
   try {
-    await boardService.create<MFTableRow>('meal-food', 'mf-rows', { section_id: props.sectionId, icon: '🍚', item_name: '', subtext: '', note: '', sort_order: localRows.value.length })
+    await boardService.create<MFTableRow>('meal-food', 'mf-rows', { section_id: props.sectionId, icon: '🍚', item_name: '', subtext: '', note: '', sort_order: nextBoardOrder(localRows.value) })
     emit('refresh')
   } catch { emit('error', '品目を追加できませんでした。') }
 }
 
 async function addContainer(row: MFTableRow) {
   try {
-    await boardService.create('meal-food', 'mf-containers', { row_id: row.id, name: '', container_type: 'register', quantity: 0, sort_order: containersFor(row.id).length })
+    await boardService.create('meal-food', 'mf-containers', { row_id: row.id, name: '', container_type: 'register', quantity: 0, sort_order: nextBoardOrder(containersFor(row.id)) })
     emit('refresh')
   } catch { emit('error', '容器を追加できませんでした。') }
 }
@@ -138,14 +146,12 @@ function typeLabel(type: MFTableContainer['container_type']) {
 function typeEmoji(type: MFTableContainer['container_type']) { return type === 'insulated_box' ? '🧰' : type === 'food_warmer' ? '♨️' : '🔢' }
 function levelClass(quantity: number) { return quantity >= 80 ? 'good' : quantity >= 30 ? 'warn' : 'danger' }
 
-async function drop(index: number) {
-  if (draggedRow.value === null || draggedRow.value === index) return
-  const ordered = sortedRows.value
-  const [moved] = ordered.splice(draggedRow.value, 1)
-  if (!moved) return
-  ordered.splice(index, 0, moved)
-  localRows.value = ordered
+async function drop(targetId: number) {
+  if (props.readonly || draggedRow.value === null) return
+  const ordered = moveBoardRecord(localRows.value, draggedRow.value, targetId)
   draggedRow.value = null
+  if (!ordered) return
+  localRows.value = ordered
   try { await boardService.reorder('meal-food', 'mf-rows', ordered.map((row) => row.id)) }
   catch { emit('error', '品目の並び順を保存できませんでした。') }
 }
@@ -172,11 +178,11 @@ const unsubscribeLive = live?.subscribe((change) => {
     <p class="desc">品目ごとに保温ボックス・フードウォーマーの割合、または打込み数を登録できます。</p>
     <div class="table-wrap"><table>
       <thead><tr><th class="item-col">品目</th><th>容器・フードウォーマー</th><th class="note-col">備考</th></tr></thead>
-      <tbody><tr v-for="(row,index) in sortedRows" :key="row.id" draggable="true" @dragstart="draggedRow = index" @dragover.prevent @drop="drop(index)">
+      <tbody><tr v-for="row in sortedRows" :key="row.id" draggable="true" @dragstart.stop="draggedRow = row.id" @dragover.prevent @drop.stop="drop(row.id)">
         <td class="item-cell">
-          <div class="item-head"><span class="grip">⠿</span><input v-model="row.icon" :data-live-field="liveFieldKey('mf-rows',row.id,'icon')" class="icon" :disabled="readonly" @input="schedule('mf-rows',row.id,'icon',row.icon)" /><div class="meta">
-            <input v-model="row.item_name" :data-live-field="liveFieldKey('mf-rows',row.id,'item_name')" class="name" placeholder="品目名" :disabled="readonly" @input="schedule('mf-rows',row.id,'item_name',row.item_name)" @blur="save('mf-rows',row.id,'item_name',row.item_name)" @compositionstart="composing.add(`mf-rows:${row.id}:item_name`)" @compositionend="composing.delete(`mf-rows:${row.id}:item_name`);schedule('mf-rows',row.id,'item_name',row.item_name)" />
-            <input v-model="row.subtext" :data-live-field="liveFieldKey('mf-rows',row.id,'subtext')" placeholder="サブテキスト" :disabled="readonly" @input="schedule('mf-rows',row.id,'subtext',row.subtext)" @blur="save('mf-rows',row.id,'subtext',row.subtext)" @compositionstart="composing.add(`mf-rows:${row.id}:subtext`)" @compositionend="composing.delete(`mf-rows:${row.id}:subtext`);schedule('mf-rows',row.id,'subtext',row.subtext)" />
+          <div class="item-head"><span class="grip">⠿</span><input v-model="row.icon" :data-live-field="liveFieldKey('mf-rows',row.id,'icon')" class="icon" :disabled="readonly" @input="schedule('mf-rows',row.id,'icon',row.icon,$event)" @compositionstart="composing.add(`mf-rows:${row.id}:icon`);live?.beginComposition('mf-rows',row.id,'icon')" @compositionend="composing.delete(`mf-rows:${row.id}:icon`);schedule('mf-rows',row.id,'icon',row.icon,$event)" /><div class="meta">
+            <input v-model="row.item_name" :data-live-field="liveFieldKey('mf-rows',row.id,'item_name')" class="name" placeholder="品目名" :disabled="readonly" @input="schedule('mf-rows',row.id,'item_name',row.item_name,$event)" @blur="save('mf-rows',row.id,'item_name',row.item_name)" @compositionstart="composing.add(`mf-rows:${row.id}:item_name`);live?.beginComposition('mf-rows',row.id,'item_name')" @compositionend="composing.delete(`mf-rows:${row.id}:item_name`);schedule('mf-rows',row.id,'item_name',row.item_name,$event)" />
+            <input v-model="row.subtext" :data-live-field="liveFieldKey('mf-rows',row.id,'subtext')" placeholder="サブテキスト" :disabled="readonly" @input="schedule('mf-rows',row.id,'subtext',row.subtext,$event)" @blur="save('mf-rows',row.id,'subtext',row.subtext)" @compositionstart="composing.add(`mf-rows:${row.id}:subtext`);live?.beginComposition('mf-rows',row.id,'subtext')" @compositionend="composing.delete(`mf-rows:${row.id}:subtext`);schedule('mf-rows',row.id,'subtext',row.subtext,$event)" />
           </div></div>
           <button v-if="canDelete" class="remove" @click="remove('mf-rows',row.id,'品目')">削除</button>
         </td>
@@ -184,12 +190,12 @@ const unsubscribeLive = live?.subscribe((change) => {
           <div v-for="container in containersFor(row.id)" :key="container.id" class="card">
             <div class="type-row"><button class="type" :disabled="readonly" @click.stop="openMenu = openMenu === container.id ? null : container.id">{{ typeEmoji(container.container_type) }} {{ typeLabel(container.container_type) }} ▾</button><button v-if="canDelete" class="x" @click="remove('mf-containers',container.id,'容器')">×</button></div>
             <div v-if="openMenu === container.id" class="menu" @click.stop><button @click="selectType(container,'insulated_box')">🧰 保温ボックス</button><button @click="selectType(container,'food_warmer')">♨️ フードウォーマー</button><button @click="selectType(container,'register')">🔢 打込み</button></div>
-            <input v-model="container.name" :data-live-field="liveFieldKey('mf-containers',container.id,'name')" placeholder="名称" :disabled="readonly" @input="schedule('mf-containers',container.id,'name',container.name)" @blur="save('mf-containers',container.id,'name',container.name)" @compositionstart="composing.add(`mf-containers:${container.id}:name`)" @compositionend="composing.delete(`mf-containers:${container.id}:name`);schedule('mf-containers',container.id,'name',container.name)" />
-            <div v-if="container.container_type === 'register'" class="number"><input v-model.number="container.quantity" :data-live-field="liveFieldKey('mf-containers',container.id,'quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="readonly" @input="schedule('mf-containers',container.id,'quantity',container.quantity)" @blur="save('mf-containers',container.id,'quantity',container.quantity)" /><span>個</span></div>
-            <div v-else class="battery-wrap"><div class="battery" :class="levelClass(container.quantity)"><div class="battery-terminal"></div><div class="battery-fill" :style="{width:`${Math.min(100,container.quantity)}%`}"></div><div class="battery-content"><b>{{ Math.round(container.quantity / 10) }}割</b></div></div><input v-model.number="container.quantity" :data-live-field="liveFieldKey('mf-containers',container.id,'quantity')" class="range" type="range" min="0" max="100" :disabled="readonly" @input="schedule('mf-containers',container.id,'quantity',container.quantity)" @change="save('mf-containers',container.id,'quantity',container.quantity)" /></div>
+            <input v-model="container.name" :data-live-field="liveFieldKey('mf-containers',container.id,'name')" placeholder="名称" :disabled="readonly" @input="schedule('mf-containers',container.id,'name',container.name,$event)" @blur="save('mf-containers',container.id,'name',container.name)" @compositionstart="composing.add(`mf-containers:${container.id}:name`);live?.beginComposition('mf-containers',container.id,'name')" @compositionend="composing.delete(`mf-containers:${container.id}:name`);schedule('mf-containers',container.id,'name',container.name,$event)" />
+            <div v-if="container.container_type === 'register'" class="number"><input v-model.number="container.quantity" :data-live-field="liveFieldKey('mf-containers',container.id,'quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="readonly" @input="schedule('mf-containers',container.id,'quantity',container.quantity,$event)" @blur="save('mf-containers',container.id,'quantity',container.quantity)" /><span>個</span></div>
+            <div v-else class="battery-wrap"><div class="battery" :class="levelClass(container.quantity)"><div class="battery-terminal"></div><div class="battery-fill" :style="{width:`${Math.min(100,container.quantity)}%`}"></div><div class="battery-content"><b>{{ Math.round(container.quantity / 10) }}割</b></div></div><input v-model.number="container.quantity" :data-live-field="liveFieldKey('mf-containers',container.id,'quantity')" class="range" type="range" min="0" max="100" :disabled="readonly" @input="schedule('mf-containers',container.id,'quantity',container.quantity,$event)" @change="save('mf-containers',container.id,'quantity',container.quantity)" /></div>
           </div><button class="add-container-card" :disabled="readonly" @click="addContainer(row)"><span>＋</span><span>追加</span></button>
         </div></td>
-        <td><textarea v-model="row.note" :data-live-field="liveFieldKey('mf-rows',row.id,'note')" :disabled="readonly" @input="schedule('mf-rows',row.id,'note',row.note)" @blur="save('mf-rows',row.id,'note',row.note)" @compositionstart="composing.add(`mf-rows:${row.id}:note`)" @compositionend="composing.delete(`mf-rows:${row.id}:note`);schedule('mf-rows',row.id,'note',row.note)"></textarea></td>
+        <td><textarea v-model="row.note" :data-live-field="liveFieldKey('mf-rows',row.id,'note')" :disabled="readonly" @input="schedule('mf-rows',row.id,'note',row.note,$event)" @blur="save('mf-rows',row.id,'note',row.note)" @compositionstart="composing.add(`mf-rows:${row.id}:note`);live?.beginComposition('mf-rows',row.id,'note')" @compositionend="composing.delete(`mf-rows:${row.id}:note`);schedule('mf-rows',row.id,'note',row.note,$event)"></textarea></td>
       </tr></tbody><tfoot><tr><td colspan="3" class="add-row-cell"><button class="add-row" :disabled="readonly" @click="addRow">＋ 品目を追加</button></td></tr></tfoot>
     </table></div>
   </div>

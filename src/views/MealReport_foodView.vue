@@ -7,6 +7,7 @@ import { provideLiveBoard } from '@/composables/useLiveBoard'
 import { useRealtimeBoard } from '@/composables/useRealtimeBoard'
 import { boardService, mastersService } from '@/lib/services'
 import { mergeBoardChange } from '@/lib/boardRealtime'
+import { compareBoardOrder, moveBoardRecord, nextBoardOrder } from '@/lib/boardOrder'
 import { useAuthStore } from '@/stores/auth'
 import type { MealFoodBoardData, MFTableSection, Store } from '@/lib/types'
 
@@ -16,7 +17,7 @@ const stores = ref<Store[]>([])
 const loading = ref(false)
 const errorMessage = ref('')
 const dragged = ref<number | null>(null)
-const sections = computed(() => [...(data.value?.mftable_sections ?? [])].sort((a, b) => a.sort_order - b.sort_order))
+const sections = computed(() => [...(data.value?.mftable_sections ?? [])].sort(compareBoardOrder))
 const availableStores = computed(() => stores.value.filter((store) => store.is_active && auth.canViewStore(store.id)))
 
 async function load(silent = false) {
@@ -31,7 +32,7 @@ async function load(silent = false) {
 async function addSection() {
   const store = availableStores.value.find((item) => auth.canEditStore(item.id))
   if (!store) { errorMessage.value = '編集できる売店がありません。'; return }
-  try { await boardService.create('meal-food', 'mf-sections', { store_id: store.id, store_name: store.name, sort_order: sections.value.length }); await load(true) }
+  try { await boardService.create('meal-food', 'mf-sections', { store_id: store.id, store_name: store.name, sort_order: nextBoardOrder(sections.value) }); await load(true) }
   catch { errorMessage.value = '売店セクションを追加できませんでした。' }
 }
 async function changeStore(section: MFTableSection, event: Event) {
@@ -49,18 +50,18 @@ async function removeSection(section: MFTableSection) {
   try { await boardService.remove('meal-food', 'mf-sections', section.id); await load(true) }
   catch { data.value.mftable_sections = before; errorMessage.value = '売店を削除できませんでした。' }
 }
-async function drop(index: number) {
-  if (dragged.value === null || dragged.value === index) return
-  const ordered = [...sections.value]
-  const [moved] = ordered.splice(dragged.value, 1)
-  if (!moved) return
-  ordered.splice(index, 0, moved); dragged.value = null
+async function drop(targetId: number) {
+  if (dragged.value === null || !data.value || !auth.canEditReports) return
+  const ordered = moveBoardRecord(sections.value, dragged.value, targetId)
+  dragged.value = null
+  if (!ordered) return
+  data.value.mftable_sections = ordered
   try { await boardService.reorder('meal-food', 'mf-sections', ordered.map((section) => section.id)); await load(true) }
   catch { errorMessage.value = '売店の並び順を保存できませんでした。' }
 }
-provideLiveBoard('meal-food', () => load(true))
+const live = provideLiveBoard('meal-food', () => load(true))
 const { realtimeState } = useRealtimeBoard('meal-food', () => load(true), (change) => (
-  data.value ? mergeBoardChange(data.value as MealFoodBoardData & Record<string, unknown>, change) : false
+  data.value ? mergeBoardChange(data.value as MealFoodBoardData & Record<string, unknown>, change, live.reconcile) : false
 ))
 onMounted(load)
 </script>
@@ -70,7 +71,7 @@ onMounted(load)
     <AppHeader title="食数報告（フード）" description="品目・容器・割合は自動保存され、同じ表を開いているユーザーへ反映されます。" />
     <div class="connection"><span :class="['realtime',realtimeState]">{{ realtimeState === 'connected' ? '● リアルタイム接続中' : '● 再接続中' }}</span></div>
     <p v-if="errorMessage" class="error">{{ errorMessage }}</p><p v-if="loading" class="muted">読み込み中...</p>
-    <section v-for="(section,index) in sections" :key="section.id" class="table-section" draggable="true" @dragstart="dragged = index" @dragover.prevent @drop="drop(index)">
+    <section v-for="section in sections" :key="section.id" class="table-section" draggable="true" @dragstart="dragged = section.id" @dragover.prevent @drop="drop(section.id)">
       <div class="section-header"><div class="section-left"><span class="grip">⠿</span><select :value="section.store_id ?? ''" :disabled="!section.store_id || !auth.canEditStore(section.store_id)" @change="changeStore(section,$event)"><option v-for="store in availableStores" :key="store.id" :value="store.id">{{ store.name }}</option></select></div><button v-if="auth.canManage" class="delete" @click="removeSection(section)">削除</button></div>
       <MFTable v-if="data" :section-id="section.id" :rows="data.mftable_rows.filter(row => row.section_id === section.id)" :containers="data.mftable_containers" :readonly="!section.store_id || !auth.canEditStore(section.store_id)" :can-delete="auth.canManage" @refresh="load(true)" @error="errorMessage = $event" />
     </section>

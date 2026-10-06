@@ -34,9 +34,9 @@ async function load(silent = false) {
 }
 function rows(storeId: number, scope: 'drink' | 'consumable') { return data.value?.dtable_rows.filter((row) => row.store_id === storeId && row.scope === scope) ?? [] }
 function locks(storeId: number, scope: 'drink' | 'consumable') { return data.value?.dtable_locks.filter((lock) => lock.store_id === storeId && lock.scope === scope) ?? [] }
-provideLiveBoard('drink-refill', () => load(true))
+const live = provideLiveBoard('drink-refill', () => load(true))
 const { realtimeState } = useRealtimeBoard('drink-refill', () => load(true), (change) => (
-  data.value ? mergeBoardChange(data.value as DrinkBoardData & Record<string, unknown>, change) : false
+  data.value ? mergeBoardChange(data.value as DrinkBoardData & Record<string, unknown>, change, live.reconcile) : false
 ))
 onMounted(load)
 </script>

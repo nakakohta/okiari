@@ -126,7 +126,9 @@ def _active_rows(table: str, board_id: int) -> list[dict]:
     query = supabase.table(table).select("*").eq("board_id", board_id)
     if table != "mdtable_cells" and table not in {"dtable_locks", "mdtable_locks"}:
         query = query.is_("deleted_at", "null")
-    response = query.order("sort_order" if table not in {"mdtable_cells", "dtable_locks", "mdtable_locks"} else "id").execute()
+    if table not in {"mdtable_cells", "dtable_locks", "mdtable_locks"}:
+        query = query.order("sort_order")
+    response = query.order("id").execute()
     return getattr(response, "data", None) or []
 
 

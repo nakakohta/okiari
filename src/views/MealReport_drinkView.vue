@@ -36,9 +36,9 @@ function canEditBooth(name: string) {
   const store = stores.value.find((item) => item.name === name)
   return Boolean(store && auth.canEditStore(store.id))
 }
-provideLiveBoard('meal-drink', () => load(true))
+const live = provideLiveBoard('meal-drink', () => load(true))
 const { realtimeState } = useRealtimeBoard('meal-drink', () => load(true), (change) => (
-  data.value ? mergeBoardChange(data.value as MealDrinkBoardData & Record<string, unknown>, change) : false
+  data.value ? mergeBoardChange(data.value as MealDrinkBoardData & Record<string, unknown>, change, live.reconcile) : false
 ))
 onMounted(load)
 </script>

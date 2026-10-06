@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { boardService } from '@/lib/services'
+import { compareBoardOrder, nextBoardOrder } from '@/lib/boardOrder'
+import { readInputValue } from '@/lib/liveInput'
 import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
 import { createAutosaveQueue } from '@/lib/autosave'
 import type { MDTableCell, MDTableColumn, MDTableLock, MDTableRow } from '@/lib/types'
@@ -35,8 +37,8 @@ const boothGroups = {
 }
 
 const boothLocked = computed(() => props.locks.some((lock) => lock.column_key === 'booth' && lock.is_locked))
-const sortedRows = computed(() => [...localRows.value].sort((a, b) => a.sort_order - b.sort_order))
-const sortedColumns = computed(() => [...localColumns.value].sort((a, b) => a.sort_order - b.sort_order))
+const sortedRows = computed(() => [...localRows.value].sort(compareBoardOrder))
+const sortedColumns = computed(() => [...localColumns.value].sort(compareBoardOrder))
 
 watch(() => props.rows, (rows) => {
   localRows.value = rows.map((incoming) => {
@@ -67,17 +69,19 @@ function key(rowId: number, columnId: number) { return `cell:${rowId}:${columnId
 function displayBooth(row: MDTableRow) { return row.booth === 'その他' ? row.custom_booth || 'その他' : row.booth || 'ブース' }
 function rowEditable(row: MDTableRow) { return props.canEditBooth(row.booth) }
 
-function scheduleCell(rowId: number, columnId: number) {
+function scheduleCell(rowId: number, columnId: number, event?: Event) {
   const cellKey = key(rowId, columnId)
-  if (composing.has(cellKey)) return
+  if (event) values.value[cellKey] = String(readInputValue(event))
   if (live) {
     const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
-    live.edit('md-cells', existing?.id ?? 0, 'value', values.value[cellKey] ?? '', {
+    const update = composing.has(cellKey) ? live.preview : live.edit
+    update('md-cells', existing?.id ?? 0, 'value', values.value[cellKey] ?? '', {
       row_id: rowId,
       column_id: columnId,
     })
     return
   }
+  if (composing.has(cellKey)) return
   autosave.schedule(cellKey, async () => {
     const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
     if (existing) await boardService.update('meal-drink', 'md-cells', existing.id, { value: values.value[cellKey] ?? '' })
@@ -90,7 +94,11 @@ function scheduleCell(rowId: number, columnId: number) {
 }
 
 function saveCell(rowId: number, columnId: number) {
-  if (live) return
+  if (live) {
+    const existing = props.cells.find(cell => cell.row_id === rowId && cell.column_id === columnId)
+    live.flush('md-cells', existing?.id ?? 0, 'value', { row_id: rowId, column_id: columnId })
+    return
+  }
   const cellKey = key(rowId, columnId)
   if (!autosave.has(cellKey)) scheduleCell(rowId, columnId)
   autosave.flush(cellKey)
@@ -101,13 +109,15 @@ async function saveRow(row: MDTableRow, fields: Record<string, unknown>) {
   catch { emit('error', '売店名を保存できませんでした。') }
 }
 
-function scheduleCustomBooth(row: MDTableRow) {
+function scheduleCustomBooth(row: MDTableRow, event?: Event) {
   const timerKey = `row:${row.id}:custom_booth`
-  if (composing.has(`row:${row.id}`)) return
+  if (event) row.custom_booth = String(readInputValue(event))
   if (live) {
-    live.edit('md-rows', row.id, 'custom_booth', row.custom_booth)
+    const update = composing.has(`row:${row.id}`) ? live.preview : live.edit
+    update('md-rows', row.id, 'custom_booth', row.custom_booth)
     return
   }
+  if (composing.has(`row:${row.id}`)) return
   autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }), {
     onError: (willRetry) => emit('error', willRetry
       ? '通信が不安定なため、その他売店名の保存を再試行します。'
@@ -115,7 +125,7 @@ function scheduleCustomBooth(row: MDTableRow) {
   })
 }
 function saveCustomBooth(row: MDTableRow) {
-  if (live) return
+  if (live) { live.flush('md-rows', row.id, 'custom_booth'); return }
   const timerKey = `row:${row.id}:custom_booth`
   if (!autosave.has(timerKey)) scheduleCustomBooth(row)
   autosave.flush(timerKey)
@@ -132,25 +142,27 @@ function selectBooth(row: MDTableRow, booth: string) {
 
 async function addRow() {
   try {
-    await boardService.create('meal-drink', 'md-rows', { floor_group: props.floorGroup, booth_type: props.floorGroup, booth: '', custom_booth: '', sort_order: localRows.value.length })
+    await boardService.create('meal-drink', 'md-rows', { floor_group: props.floorGroup, booth_type: props.floorGroup, booth: '', custom_booth: '', sort_order: nextBoardOrder(localRows.value) })
     emit('refresh')
   } catch { emit('error', '行を追加できませんでした。') }
 }
 
 async function addColumn() {
   try {
-    await boardService.create('meal-drink', 'md-columns', { floor_group: props.floorGroup, title: `商品名${localColumns.value.length + 1}`, sort_order: localColumns.value.length })
+    await boardService.create('meal-drink', 'md-columns', { floor_group: props.floorGroup, title: `商品名${localColumns.value.length + 1}`, sort_order: nextBoardOrder(localColumns.value) })
     emit('refresh')
   } catch { emit('error', '列を追加できませんでした。') }
 }
 
-function scheduleColumn(column: MDTableColumn) {
+function scheduleColumn(column: MDTableColumn, event?: Event) {
   const timerKey = `column:${column.id}:title`
-  if (composing.has(`column:${column.id}`)) return
+  if (event) column.title = String(readInputValue(event))
   if (live) {
-    live.edit('md-columns', column.id, 'title', column.title)
+    const update = composing.has(`column:${column.id}`) ? live.preview : live.edit
+    update('md-columns', column.id, 'title', column.title)
     return
   }
+  if (composing.has(`column:${column.id}`)) return
   autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }), {
     onError: (willRetry) => emit('error', willRetry
       ? '通信が不安定なため、列名の保存を再試行します。'
@@ -158,7 +170,7 @@ function scheduleColumn(column: MDTableColumn) {
   })
 }
 function saveColumn(column: MDTableColumn) {
-  if (live) return
+  if (live) { live.flush('md-columns', column.id, 'title'); return }
   const timerKey = `column:${column.id}:title`
   if (!autosave.has(timerKey)) scheduleColumn(column)
   autosave.flush(timerKey)
@@ -225,7 +237,7 @@ const unsubscribeLive = live?.subscribe((change) => {
       <thead><tr>
         <th class="booth-head">売店 <button class="lock" :disabled="!canManageLocks" @click="toggleLock">{{ boothLocked ? '🔒' : '🔓' }}</button></th>
         <th v-for="column in sortedColumns" :key="column.id">
-          <input v-model="column.title" :data-live-field="liveFieldKey('md-columns',column.id,'title')" :disabled="!canEditStructure" @input="scheduleColumn(column)" @blur="saveColumn(column)" @compositionstart="composing.add(`column:${column.id}`)" @compositionend="composing.delete(`column:${column.id}`);scheduleColumn(column)" />
+          <input v-model="column.title" :data-live-field="liveFieldKey('md-columns',column.id,'title')" :disabled="!canEditStructure" @input="scheduleColumn(column,$event)" @blur="saveColumn(column)" @compositionstart="composing.add(`column:${column.id}`);live?.beginComposition('md-columns',column.id,'title')" @compositionend="composing.delete(`column:${column.id}`);scheduleColumn(column,$event)" />
           <button v-if="canDelete" class="small-delete" @click="remove('md-columns', column.id, '列')">×</button>
         </th><th v-if="canDelete"></th>
       </tr></thead>
@@ -234,11 +246,11 @@ const unsubscribeLive = live?.subscribe((change) => {
           <button class="booth" :disabled="boothLocked || !canSelectBooth" @click="popupRowId = popupRowId === row.id ? null : row.id">{{ displayBooth(row) }} ▾</button>
           <div v-if="popupRowId === row.id" class="booth-popup">
             <button v-for="booth in boothGroups[floorGroup]" :key="booth" :disabled="!canEditBooth(booth)" @click="selectBooth(row, booth)">{{ booth }}</button>
-            <div v-if="row.booth === 'その他'" class="custom"><input v-model="row.custom_booth" :data-live-field="liveFieldKey('md-rows',row.id,'custom_booth')" placeholder="売店名" @input="scheduleCustomBooth(row)" @blur="saveCustomBooth(row)" @compositionstart="composing.add(`row:${row.id}`)" @compositionend="composing.delete(`row:${row.id}`);scheduleCustomBooth(row)" /><button @click="popupRowId = null">決定</button></div>
+            <div v-if="row.booth === 'その他'" class="custom"><input v-model="row.custom_booth" :data-live-field="liveFieldKey('md-rows',row.id,'custom_booth')" placeholder="売店名" @input="scheduleCustomBooth(row,$event)" @blur="saveCustomBooth(row)" @compositionstart="composing.add(`row:${row.id}`);live?.beginComposition('md-rows',row.id,'custom_booth')" @compositionend="composing.delete(`row:${row.id}`);scheduleCustomBooth(row,$event)" /><button @click="popupRowId = null">決定</button></div>
           </div>
         </td>
         <td v-for="column in sortedColumns" :key="column.id">
-          <input v-model="values[key(row.id,column.id)]" :data-live-field="liveFieldKey('md-cells',props.cells.find(cell => cell.row_id === row.id && cell.column_id === column.id)?.id ?? 0,'value',{row_id:row.id,column_id:column.id})" inputmode="numeric" :disabled="!rowEditable(row)" @input="scheduleCell(row.id,column.id)" @blur="saveCell(row.id,column.id)" @compositionstart="composing.add(key(row.id,column.id))" @compositionend="composing.delete(key(row.id,column.id));scheduleCell(row.id,column.id)" />
+          <input v-model="values[key(row.id,column.id)]" :data-live-field="liveFieldKey('md-cells',props.cells.find(cell => cell.row_id === row.id && cell.column_id === column.id)?.id ?? 0,'value',{row_id:row.id,column_id:column.id})" inputmode="numeric" :disabled="!rowEditable(row)" @input="scheduleCell(row.id,column.id,$event)" @blur="saveCell(row.id,column.id)" @compositionstart="composing.add(key(row.id,column.id));live?.beginComposition('md-cells',0,'value',{row_id:row.id,column_id:column.id})" @compositionend="composing.delete(key(row.id,column.id));scheduleCell(row.id,column.id,$event)" />
         </td>
         <td v-if="canDelete"><button class="small-delete" @click="remove('md-rows', row.id, '行')">削除</button></td>
       </tr></tbody>

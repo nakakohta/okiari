@@ -248,7 +248,9 @@ async function activeRows(context: AuthContext, table: string, boardId: number) 
     query = query.is('deleted_at', null)
   }
   const orderColumn = ['mdtable_cells', 'dtable_locks', 'mdtable_locks'].includes(table) ? 'id' : 'sort_order'
-  const result = await query.order(orderColumn)
+  query = query.order(orderColumn)
+  if (orderColumn !== 'id') query = query.order('id')
+  const result = await query
   return ensureResult(result.data as JsonRecord[] | null, result.error, 'Board rows could not be loaded')
 }
 
