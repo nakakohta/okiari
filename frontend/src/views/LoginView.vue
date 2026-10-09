@@ -16,7 +16,10 @@ async function handleLogin() {
   const result = await auth.login(email.value, password.value)
 
   if (result.success) {
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
+    const requestedRedirect = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+    const redirect = requestedRedirect.startsWith('/') && !requestedRedirect.startsWith('//')
+      ? requestedRedirect
+      : '/dashboard'
     router.push(redirect)
     return
   }
@@ -29,8 +32,8 @@ async function handleLogin() {
   <div class="login-wrapper">
     <header class="brand-header">
       <div class="brand-inner">
-        <h1>OkiAri</h1>
-        <p>沖縄アリーナ飲食業務管理</p>
+        <h1>Private Workspace</h1>
+        <p>関係者専用ポータル</p>
       </div>
     </header>
 

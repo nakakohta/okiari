@@ -1,0 +1,11 @@
+{
+  "name": "okiari-sites-workspace",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "build": "node scripts/build-sites.mjs",
+    "test:realtime": "npm --prefix frontend run test:realtime"
+  }
+}

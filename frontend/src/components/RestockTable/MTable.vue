@@ -1,0 +1,134 @@
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { boardService } from '@/lib/services'
+import { compareBoardOrder, nextBoardOrder } from '@/lib/boardOrder'
+import { readInputValue } from '@/lib/liveInput'
+import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
+import {
+  createAutosaveQueue,
+  normalizePostgresInteger,
+  POSTGRES_INTEGER_MAX,
+} from '@/lib/autosave'
+import type { MTableRow, Product, Store } from '@/lib/types'
+
+const props = defineProps<{
+  rows: MTableRow[]
+  stores: Store[]
+  products: Product[]
+  canEditStore: (storeId: number) => boolean
+  canConfirm: boolean
+  canDelete: boolean
+}>()
+const emit = defineEmits<{ refresh: []; error: [message: string] }>()
+type Field = 'store_id' | 'product_id' | 'expected_quantity' | 'actual_quantity' | 'note'
+const localRows = ref<MTableRow[]>([])
+const autosave = createAutosaveQueue()
+const composing = new Set<string>()
+const live = useLiveBoard()
+
+const sortedRows = computed(() => [...localRows.value].sort(compareBoardOrder))
+watch(() => props.rows, (rows) => {
+  localRows.value = rows.map((incoming) => {
+    const current = localRows.value.find((row) => row.id === incoming.id)
+    const merged = { ...incoming }
+    for (const field of ['store_id','product_id','expected_quantity','actual_quantity','note'] as Field[]) {
+      const liveValue = ['expected_quantity', 'actual_quantity', 'note'].includes(field)
+        ? live?.getValue('m-rows', incoming.id, field)
+        : undefined
+      if (liveValue !== undefined) merged[field] = liveValue as never
+      else if (current && autosave.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
+    }
+    return merged
+  })
+}, { immediate: true, deep: true })
+
+function storeName(id: number) { return props.stores.find((store) => store.id === id)?.name ?? '-' }
+function productName(id: number) { return props.products.find((product) => product.id === id)?.name ?? '-' }
+function unit(id: number) { return props.products.find((product) => product.id === id)?.unit ?? '' }
+
+function schedule(row: MTableRow, field: Field, event?: Event) {
+  const timerKey = `${row.id}:${field}`
+  if (event) row[field] = readInputValue(event) as never
+  if (live && ['expected_quantity', 'actual_quantity', 'note'].includes(field)) {
+    const update = composing.has(timerKey) ? live.preview : live.edit
+    update('m-rows', row.id, field, row[field])
+    return
+  }
+  if (composing.has(timerKey)) return
+  autosave.schedule(timerKey, async () => {
+    if (field === 'expected_quantity' || field === 'actual_quantity') {
+      row[field] = normalizePostgresInteger(row[field])
+    }
+    await boardService.update('inventory', 'm-rows', row.id, { [field]: row[field] })
+  }, {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、棚卸内容の保存を再試行します。'
+      : '棚卸内容を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+function save(row: MTableRow, field: Field) {
+  if (live && ['expected_quantity', 'actual_quantity', 'note'].includes(field)) { live.flush('m-rows', row.id, field); return }
+  const timerKey = `${row.id}:${field}`
+  if (!autosave.has(timerKey)) schedule(row, field)
+  autosave.flush(timerKey)
+}
+async function addRow() {
+  const store = props.stores.find((item) => item.is_active && props.canEditStore(item.id))
+  const product = props.products.find((item) => item.is_active)
+  if (!store || !product) { emit('error', '追加に必要な売店または商品がありません。'); return }
+  try { await boardService.create('inventory', 'm-rows', { store_id: store.id, product_id: product.id, expected_quantity: 0, actual_quantity: 0, note: '', is_confirmed: false, sort_order: nextBoardOrder(localRows.value) }); emit('refresh') }
+  catch { emit('error', '棚卸行を追加できませんでした。') }
+}
+async function confirmRow(row: MTableRow) {
+  try { await boardService.update('inventory', 'm-rows', row.id, { is_confirmed: !row.is_confirmed }); emit('refresh') }
+  catch { emit('error', '棚卸を確定できませんでした。') }
+}
+async function removeRow(row: MTableRow) {
+  if (!confirm('この棚卸行を削除しますか？')) return
+  autosave.cancelMatching((key) => key.startsWith(`${row.id}:`))
+  live?.cancel('m-rows', row.id)
+  const before = localRows.value
+  localRows.value = localRows.value.filter((item) => item.id !== row.id)
+  try { await boardService.remove('inventory', 'm-rows', row.id); emit('refresh') }
+  catch { localRows.value = before; emit('error', '棚卸行を削除できませんでした。') }
+}
+async function clearRows() {
+  if (!confirm('実数・備考・確認状態をクリアしますか？')) return
+  try { await boardService.clear('inventory'); emit('refresh') }
+  catch { emit('error', '棚卸表をクリアできませんでした。') }
+}
+onBeforeUnmount(() => {
+  unsubscribeLive?.()
+  autosave.flushAll()
+  autosave.stop()
+})
+
+const unsubscribeLive = live?.subscribe((change) => {
+  if (change.resource !== 'm-rows' || !['expected_quantity', 'actual_quantity', 'note'].includes(change.field)) return
+  const row = localRows.value.find((item) => item.id === change.recordId)
+  if (row) (row as unknown as Record<string, unknown>)[change.field] = change.value
+})
+</script>
+
+<template>
+  <div class="m-table">
+    <div class="toolbar"><button @click="addRow">＋行追加</button><button v-if="canDelete" class="clear" @click="clearRows">クリア</button></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>売店</th><th>商品</th><th>予定数</th><th>実数</th><th>差分</th><th>確認状態</th><th>備考</th><th v-if="canDelete"></th></tr></thead>
+      <tbody><tr v-for="row in sortedRows" :key="row.id" :class="{ confirmed: row.is_confirmed }">
+        <td><select v-model="row.store_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'store_id')"><option v-for="store in stores.filter(item => item.is_active && canEditStore(item.id))" :key="store.id" :value="store.id">{{ store.name }}</option></select><span class="print">{{ storeName(row.store_id) }}</span></td>
+        <td><select v-model="row.product_id" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @change="save(row,'product_id')"><option v-for="product in products.filter(item => item.is_active)" :key="product.id" :value="product.id">{{ product.name }}</option></select><span class="print">{{ productName(row.product_id) }}</span></td>
+        <td><div class="quantity"><input v-model.number="row.expected_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'expected_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'expected_quantity',$event)" @blur="save(row,'expected_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td><div class="quantity"><input v-model.number="row.actual_quantity" :data-live-field="liveFieldKey('m-rows',row.id,'actual_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'actual_quantity',$event)" @blur="save(row,'actual_quantity')" /><span>{{ unit(row.product_id) }}</span></div></td>
+        <td :class="{ negative: row.actual_quantity-row.expected_quantity < 0, positive: row.actual_quantity-row.expected_quantity > 0 }">{{ row.actual_quantity - row.expected_quantity }}</td>
+        <td><button class="confirm" :class="{ active: row.is_confirmed }" :disabled="!canConfirm" @click="confirmRow(row)">{{ row.is_confirmed ? '確定済み' : '未確定' }}</button></td>
+        <td><input v-model="row.note" :data-live-field="liveFieldKey('m-rows',row.id,'note')" :disabled="row.is_confirmed || !canEditStore(row.store_id)" @input="schedule(row,'note',$event)" @blur="save(row,'note')" @compositionstart="composing.add(`${row.id}:note`);live?.beginComposition('m-rows',row.id,'note')" @compositionend="composing.delete(`${row.id}:note`);schedule(row,'note',$event)" /></td>
+        <td v-if="canDelete"><button class="delete" @click="removeRow(row)">削除</button></td>
+      </tr></tbody>
+    </table></div>
+  </div>
+</template>
+
+<style scoped>
+.toolbar{display:flex;justify-content:space-between;margin-bottom:12px}.toolbar button{border:0;border-radius:8px;background:#2563eb;color:white;padding:9px 14px;font-weight:700}.toolbar .clear,.delete{background:#fee2e2;color:#b91c1c}.table-wrap{overflow:auto}table{width:100%;min-width:1000px;border-collapse:collapse}th,td{border:1px solid #dbe4ee;padding:9px;text-align:center}th{background:#f8fafc}tr.confirmed{background:#f0fdf4}input,select{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px}.quantity{display:flex;align-items:center;gap:5px}.quantity span{white-space:nowrap}.confirm{border:0;border-radius:20px;background:#fef3c7;color:#92400e;padding:8px 12px;font-weight:700}.confirm.active{background:#dcfce7;color:#166534}.delete{border:0;border-radius:6px;padding:7px}.negative{color:#dc2626;font-weight:800}.positive{color:#16a34a;font-weight:800}.print{display:none}button:disabled,input:disabled,select:disabled{opacity:.6;cursor:not-allowed}@media print{select{display:none}.print{display:inline}}
+</style>

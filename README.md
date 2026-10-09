@@ -418,6 +418,36 @@ This template should help get you started developing with Vue 3 in Vite.
 
 [VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
 
+## 複数PCでリアルタイム共同編集を確認する
+
+文字単位の共同編集はFastAPIのWebSocketルームで処理します。各PCでFastAPIを起動すると、
+`127.0.0.1` はそれぞれ別のPCを指すため、同じルームには参加できません。
+
+ホストにするPCだけで、次の2つを起動してください。
+
+```bash
+npm run dev:shared
+```
+
+```bash
+cd backend
+uv run fastapi dev app/main.py --host 0.0.0.0 --port 18000
+```
+
+他のPCではサーバーを起動せず、ホストPCに表示されたLAN用URL
+（例: `http://192.168.1.10:5173`）を開きます。`VITE_API_BASE_URL` が空の場合、
+画面を配信したホストの18000番ポートをAPIとWebSocketに自動利用します。
+
+各PCでフロントエンドを起動する必要がある場合は、全PCの `.env` で同じ共有FastAPIを指定します。
+
+```dotenv
+VITE_API_BASE_URL=http://192.168.1.10:18000
+```
+
+Windows Defender Firewallでは、ホストPCのプライベートネットワークに対して
+TCP 5173/18000番の受信を許可してください。インターネットへ直接公開する構成では、
+HTTPS対応のリバースプロキシを使用し、`CORS_ORIGINS` に実際のフロントエンドURLを設定します。
+
 ## Recommended Browser Setup
 
 * Chromium-based browsers (Chrome, Edge, Brave, etc.):

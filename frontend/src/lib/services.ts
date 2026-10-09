@@ -9,6 +9,10 @@ import type {
   RestockStatus,
   Role,
   Store,
+  DrinkBoardData,
+  InventoryBoardData,
+  MealDrinkBoardData,
+  MealFoodBoardData,
 } from '@/lib/types'
 
 export const mastersService = {
@@ -66,8 +70,10 @@ export const roleService = {
 }
 
 export const reportService = {
-  async mealReports() {
-    const { data } = await api.get<MealReport[]>('/meal-reports')
+  async mealReports(reportDate?: string) {
+    const { data } = await api.get<MealReport[]>('/meal-reports', {
+      params: reportDate ? { report_date: reportDate } : undefined,
+    })
     return data
   },
   async createMealReport(payload: {
@@ -78,6 +84,20 @@ export const reportService = {
     note?: string | null
   }) {
     const { data } = await api.post<MealReport>('/meal-reports', payload)
+    return data
+  },
+  async upsertMealReport(payload: {
+    report_date: string
+    store_id: number
+    product_id: number
+    quantity: number
+    note?: string | null
+  }) {
+    const { data } = await api.put<MealReport>('/meal-reports/cell', payload)
+    return data
+  },
+  async updateMealReport(reportId: number, payload: { quantity?: number; note?: string | null }) {
+    const { data } = await api.patch<MealReport>(`/meal-reports/${reportId}`, payload)
     return data
   },
   async drinkRefills() {
@@ -97,6 +117,13 @@ export const reportService = {
     const { data } = await api.patch<RestockReport>(`/drink-refills/${reportId}/status`, { status })
     return data
   },
+  async updateDrinkRefill(
+    reportId: number,
+    payload: { quantity?: number; status?: RestockStatus; note?: string | null },
+  ) {
+    const { data } = await api.patch<RestockReport>(`/drink-refills/${reportId}`, payload)
+    return data
+  },
   async inventoryChecks() {
     const { data } = await api.get<InventoryCheck[]>('/inventory-checks')
     return data
@@ -112,5 +139,69 @@ export const reportService = {
   }) {
     const { data } = await api.post<InventoryCheck>('/inventory-checks', payload)
     return data
+  },
+  async updateInventoryCheck(
+    reportId: number,
+    payload: {
+      expected_quantity?: number
+      actual_quantity?: number
+      is_confirmed?: boolean
+      note?: string | null
+    },
+  ) {
+    const { data } = await api.patch<InventoryCheck>(`/inventory-checks/${reportId}`, payload)
+    return data
+  },
+}
+
+export type BoardKey = 'drink-refill' | 'meal-drink' | 'meal-food' | 'inventory'
+export type BoardResource =
+  | 'd-rows'
+  | 'md-rows'
+  | 'md-columns'
+  | 'md-cells'
+  | 'mf-sections'
+  | 'mf-rows'
+  | 'mf-containers'
+  | 'm-rows'
+
+export const boardService = {
+  async drink() {
+    const { data } = await api.get<DrinkBoardData>('/boards/drink-refill')
+    return data
+  },
+  async mealDrink() {
+    const { data } = await api.get<MealDrinkBoardData>('/boards/meal-drink')
+    return data
+  },
+  async mealFood() {
+    const { data } = await api.get<MealFoodBoardData>('/boards/meal-food')
+    return data
+  },
+  async inventory() {
+    const { data } = await api.get<InventoryBoardData>('/boards/inventory')
+    return data
+  },
+  async create<T>(board: BoardKey, resource: BoardResource, values: Record<string, unknown>) {
+    const { data } = await api.post<T>(`/boards/${board}/${resource}`, { values })
+    return data
+  },
+  async update<T>(board: BoardKey, resource: BoardResource, id: number, values: Record<string, unknown>) {
+    const { data } = await api.patch<T>(`/boards/${board}/${resource}/${id}`, { values })
+    return data
+  },
+  async remove(board: BoardKey, resource: BoardResource, id: number) {
+    await api.delete(`/boards/${board}/${resource}/${id}`)
+  },
+  async reorder(board: BoardKey, resource: BoardResource, ids: number[]) {
+    await api.put(`/boards/${board}/${resource}/order`, {
+      items: ids.map((id, sort_order) => ({ id, sort_order })),
+    })
+  },
+  async lock(board: 'drink-refill' | 'meal-drink', values: Record<string, unknown>) {
+    await api.put(`/boards/${board}/lock`, values)
+  },
+  async clear(board: BoardKey, values: Record<string, unknown> = {}) {
+    await api.post(`/boards/${board}/actions/clear`, values)
   },
 }
