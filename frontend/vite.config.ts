@@ -21,7 +21,7 @@ export default defineConfig(async () => {
       cloudflare({
         viteEnvironment: { name: 'server' },
         config: {
-          main: './worker/index.ts',
+          main: '../worker/index.ts',
           compatibility_date: '2026-05-22',
           assets: {
             binding: 'ASSETS',
