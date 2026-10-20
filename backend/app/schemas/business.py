@@ -16,6 +16,8 @@ class StoreRead(BaseModel):
     name: str
     store_type: str
     is_active: bool
+    drink_refill_visible: bool = False
+    drink_refill_sort_order: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -48,6 +50,13 @@ class MealReportCreate(BaseModel):
     note: str | None = None
 
 
+class MealReportUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quantity: int | None = Field(default=None, ge=0)
+    note: str | None = None
+
+
 class MealReportRead(MealReportCreate):
     id: int
     reported_by: UUID | None = None
@@ -71,6 +80,14 @@ class RestockStatusUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: RestockStatus
+
+
+class RestockReportUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quantity: int | None = Field(default=None, gt=0)
+    status: RestockStatus | None = None
+    note: str | None = None
 
 
 class RestockReportRead(RestockReportCreate):
@@ -97,6 +114,15 @@ class InventoryCheckCreate(BaseModel):
     expected_quantity: int | None = Field(default=None, ge=0)
     actual_quantity: int = Field(ge=0)
     is_confirmed: bool = False
+    note: str | None = None
+
+
+class InventoryCheckUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_quantity: int | None = Field(default=None, ge=0)
+    actual_quantity: int | None = Field(default=None, ge=0)
+    is_confirmed: bool | None = None
     note: str | None = None
 
 

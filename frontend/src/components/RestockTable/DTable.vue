@@ -1,592 +1,221 @@
 <script setup lang="ts">
-import { ref, computed } from "vue"
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { boardService } from '@/lib/services'
+import { compareBoardOrder, nextBoardOrder } from '@/lib/boardOrder'
+import { readInputValue } from '@/lib/liveInput'
+import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
+import {
+  createAutosaveQueue,
+  normalizePostgresInteger,
+  POSTGRES_INTEGER_MAX,
+} from '@/lib/autosave'
+import type { DTableLock, DTableRow } from '@/lib/types'
 
-// 列ロック状態
-const columnLock = ref({
-  status:false,
-  name:false,
-  previous:false,
-  add:false,
-  memo:false
-})
-
-// ロック切替
-function toggleLock(column:string){
-  columnLock.value[column] =
-    !columnLock.value[column]
-}
-
-// ロック警告
-function checkLock(column:string){
-  if(columnLock.value[column]){
-    showLockMessage()
-  }
-}
-
-  function showModeMessage(message:string){
-  modeMessageText.value = message
-  modeMessage.value = true
-  setTimeout(() => {
-    modeMessage.value = false
-  }, 3000)
-}
-
-defineProps<{
+const props = defineProps<{
   title: string
+  storeId: number
+  scope: 'drink' | 'consumable'
+  rows: DTableRow[]
+  locks: DTableLock[]
+  readonly: boolean
+  canManageLocks: boolean
+  canDelete: boolean
 }>()
+const emit = defineEmits<{ refresh: []; error: [message: string] }>()
 
-interface RestockItem {
-  name: string
-  previous: number
-  add: number
-  memo: string
-  status: string
+type EditableField = 'item_name' | 'max_quantity' | 'requested_quantity' | 'note'
+type Column = 'status' | 'name' | 'max_quantity' | 'requested_quantity' | 'note'
+const localRows = ref<DTableRow[]>([])
+const prepareMode = ref(false)
+const selected = ref<DTableRow | null>(null)
+const modeMessage = ref('')
+const autosave = createAutosaveQueue()
+const composing = new Set<string>()
+const live = useLiveBoard()
+
+const sortedRows = computed(() => [...localRows.value].sort(compareBoardOrder))
+const visibleRows = computed(() => prepareMode.value
+  ? sortedRows.value.filter((row) => row.status !== 'completed')
+  : sortedRows.value)
+
+watch(() => props.rows, (rows) => {
+  localRows.value = rows.map((incoming) => {
+    const current = localRows.value.find((row) => row.id === incoming.id)
+    const merged = { ...incoming }
+    for (const field of ['item_name', 'max_quantity', 'requested_quantity', 'note'] as EditableField[]) {
+      const liveValue = live?.getValue('d-rows', incoming.id, field)
+      if (liveValue !== undefined) merged[field] = liveValue as never
+      else if (current && autosave.has(`${incoming.id}:${field}`)) merged[field] = current[field] as never
+    }
+    return merged
+  })
+}, { immediate: true, deep: true })
+
+function locked(column: Column) {
+  return props.locks.some((lock) => lock.column_key === column && lock.is_locked)
 }
 
-const prepareMode = ref(false)
+function editable(column: Column) {
+  return !props.readonly && !locked(column)
+}
+
+function flash(message: string) {
+  modeMessage.value = message
+  setTimeout(() => { modeMessage.value = '' }, 2600)
+}
 
 function togglePrepareMode() {
   prepareMode.value = !prepareMode.value
-  if (prepareMode.value) {
-    showModeMessage(
-      "売店準備モードです！！ 補充状況が「未補充」「在庫無い為未補充」のみを表示します！"
-    )
-  } else {
-    showModeMessage(
-      "興行日モードになりました！！ 在庫確認頑張ってください！！ (◝ ⌄ ◜)"
-    )
+  flash(prepareMode.value
+    ? '売店準備モードです。未補充の行だけを表示します。'
+    : '興行日モードに戻りました。')
+}
+
+function schedule(row: DTableRow, field: EditableField, event?: Event) {
+  const key = `${row.id}:${field}`
+  if (event) row[field] = readInputValue(event) as never
+  if (composing.has(key)) {
+    live?.preview('d-rows', row.id, field, row[field])
+    return
+  }
+  if (live) {
+    live.edit('d-rows', row.id, field, row[field])
+    return
+  }
+  autosave.schedule(key, async () => {
+    if (field === 'max_quantity' || field === 'requested_quantity') {
+      row[field] = normalizePostgresInteger(row[field])
+    }
+    await boardService.update('drink-refill', 'd-rows', row.id, { [field]: row[field] })
+  }, {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、入力内容の保存を再試行します。'
+      : '入力内容を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+
+function save(row: DTableRow, field: EditableField) {
+  if (live) { live.flush('d-rows', row.id, field); return }
+  const key = `${row.id}:${field}`
+  if (!autosave.has(key)) schedule(row, field)
+  autosave.flush(key)
+}
+
+function composition(row: DTableRow, field: EditableField, active: boolean, event?: Event) {
+  const key = `${row.id}:${field}`
+  if (active) { composing.add(key); live?.beginComposition('d-rows', row.id, field) }
+  else {
+    composing.delete(key)
+    schedule(row, field, event)
   }
 }
 
-const items = ref<RestockItem[]>([
-  {
-    name: "",
-    previous: 0,
-    add: 0,
-    memo: "",
-    status: "未補充"
-  }
-])
+async function setStatus(status: DTableRow['status']) {
+  if (!selected.value) return
+  const row = selected.value
+  row.status = status
+  selected.value = null
+  try {
+    await boardService.update('drink-refill', 'd-rows', row.id, { status })
+  } catch { emit('error', '補充状況を保存できませんでした。') }
+}
 
-const filteredItems = computed(() => {
-  if (!prepareMode.value) {
-    return items.value
-  }
+async function addRow() {
+  try {
+    await boardService.create('drink-refill', 'd-rows', {
+      store_id: props.storeId, scope: props.scope, item_name: '', max_quantity: 0,
+      requested_quantity: 0, note: '', status: 'pending', sort_order: nextBoardOrder(localRows.value),
+    })
+    emit('refresh')
+  } catch { emit('error', '行を追加できませんでした。') }
+}
 
-  return items.value.filter(
-    item =>
-      item.status === "未補充" ||
-      item.status === "在庫無い為未補充"
-  )
+async function removeRow(row: DTableRow) {
+  if (!confirm('この行を削除しますか？')) return
+  autosave.cancelMatching((key) => key.startsWith(`${row.id}:`))
+  live?.cancel('d-rows', row.id)
+  const before = localRows.value
+  localRows.value = localRows.value.filter((item) => item.id !== row.id)
+  try { await boardService.remove('drink-refill', 'd-rows', row.id); emit('refresh') }
+  catch { localRows.value = before; emit('error', '行を削除できませんでした。') }
+}
+
+async function toggleLock(column: Column) {
+  if (!props.canManageLocks) return
+  try {
+    await boardService.lock('drink-refill', {
+      store_id: props.storeId, scope: props.scope, column_key: column, is_locked: !locked(column),
+    })
+    emit('refresh')
+  } catch { emit('error', '列のロックを変更できませんでした。') }
+}
+
+async function clearData() {
+  if (!confirm('補充状況・取ってくる数・備考をクリアしますか？')) return
+  try { await boardService.clear('drink-refill', { store_id: props.storeId, scope: props.scope }); prepareMode.value = false; emit('refresh') }
+  catch { emit('error', '表をクリアできませんでした。') }
+}
+
+onBeforeUnmount(() => {
+  unsubscribeLive?.()
+  autosave.flushAll()
+  autosave.stop()
 })
 
-function addRow() {
-  items.value.push({
-    name: "",
-    previous: 0,
-    add: 0,
-    memo: "",
-    status: "未補充"
-  })
-}
-
-function deleteRow(index: number) {
-  const result = confirm("この行を削除しますか？")
-  if (!result) return
-  items.value.splice(index, 1)
-}
-
-const showModal = ref(false)
-const selectedItem = ref<RestockItem | null>(null)
-
-function openStatusModal(item: RestockItem) {
-  selectedItem.value = item
-  showModal.value = true
-}
-
-function setStatus(status: string) {
-  if (selectedItem.value) {
-    selectedItem.value.status = status
-  }
-  showModal.value = false
-  selectedItem.value = null
-}
-
-function clearData() {
-  const result = confirm(
-    "売店準備で補充が全て終わったら押すボタンです。補充状況・取ってくる数・備考をクリアしますか？"
-  )
-  if (!result) return
-  items.value.forEach(item => {
-    item.status = "未補充"
-    item.add = 0
-    item.memo = ""
-  })
-prepareMode.value = false
-}
-
-const modeMessage = ref(false)
-const modeMessageText = ref("")
-const lockMessage = ref(false)
-
-function showLockMessage(){
-  lockMessage.value=true
-  setTimeout(()=>{
-    lockMessage.value=false
-  },2000)
-}
+const unsubscribeLive = live?.subscribe((change) => {
+  if (change.resource !== 'd-rows') return
+  const row = localRows.value.find((item) => item.id === change.recordId)
+  if (!row || !['item_name', 'max_quantity', 'requested_quantity', 'note'].includes(change.field)) return
+  ;(row as unknown as Record<string, unknown>)[change.field] = change.value
+})
 </script>
 
 <template>
   <div class="d-table">
-
-    <div
-      v-if="lockMessage"
-      class="lock-warning"
-      >
-      編集したい場合はロックを解除してください
-    </div>
-
-    <div
-      v-if="modeMessage"
-      class="mode-popup"
-    >
-      {{ modeMessageText }}
-    </div>
-
+    <div v-if="modeMessage" class="popup">{{ modeMessage }}</div>
     <div class="header">
-          <h3>{{ title }}</h3>
-
-      <div class="header-buttons">
-
-  <button
-    class="prepare-btn"
-    :class="{ active: prepareMode }"
-    @click="togglePrepareMode"
-  >
-    {{ prepareMode ? "売店準備" : "興行日"}}
-  </button>
-
-  <button
-    class="clear-btn"
-    @click="clearData"
-  >
-    クリア
-  </button>
-
-</div>
+      <h3>{{ title }}</h3>
+      <div class="actions">
+        <button class="prepare" :class="{ active: prepareMode }" @click="togglePrepareMode">
+          {{ prepareMode ? '売店準備' : '興行日' }}
+        </button>
+        <button v-if="canDelete" class="clear" @click="clearData">クリア</button>
+      </div>
     </div>
-
-    <div class="toolbar">
-      <button @click="addRow">
-        ＋行追加
-      </button>
-    </div>
-
-<div class="table-wrapper">
-    <div class="table-container">
+    <div class="toolbar"><button :disabled="readonly" @click="addRow">＋行追加</button></div>
+    <div class="table-wrap">
       <table>
-        <thead>
-          <tr>
-            <th>
-              補充状況
-              <button
-                class="lock-icon"
-                @click="toggleLock('status')"
-              >
-                {{ columnLock.status ? "🔒" : "🔓" }}
-              </button>
-            </th>
-
-            <th>
-              商品名
-              <button
-                class="lock-icon"
-                @click="toggleLock('name')"
-              >
-                {{ columnLock.name ? "🔒" : "🔓" }}
-              </button>
-            </th>
-
-            <th>
-              売店内MAX
-              <button
-                class="lock-icon"
-                @click="toggleLock('previous')"
-              >
-                {{ columnLock.previous ? "🔒" : "🔓" }}
-              </button>
-            </th>
-            <th>
-              取ってくる数
-              <button
-                class="lock-icon"
-                @click="toggleLock('add')"
-              >
-                {{ columnLock.add ? "🔒" : "🔓" }}
-              </button>
-            </th>
-
-            <th>
-              備考
-              <button
-                class="lock-icon"
-                @click="toggleLock('memo')"
-              >
-                {{ columnLock.memo ? "🔒" : "🔓" }}
-              </button>
-            </th>
-          </tr>
-        </thead>
-
+        <thead><tr>
+          <th v-for="column in ([['status','補充状況'],['name','商品名'],['max_quantity','売店内MAX'],['requested_quantity','取ってくる数'],['note','備考']] as const)" :key="column[0]">
+            {{ column[1] }}
+            <button class="lock" :disabled="!canManageLocks" @click="toggleLock(column[0])">{{ locked(column[0]) ? '🔒' : '🔓' }}</button>
+          </th><th v-if="canDelete"></th>
+        </tr></thead>
         <tbody>
-          <tr
-            v-for="(item,index) in filteredItems"
-            :key="index"
-            :class="{
-              selectedRow: selectedItem === item
-            }"
-          >
-            <td>
-              <div class="status-wrapper">
-
-                <button
-                  class="status-btn"
-                  :class="{
-                    pending:item.status==='未補充',
-                    outstock:item.status==='在庫無い為未補充',
-                    complete:item.status==='完了'
-                  }"
-                  @click="columnLock.status
-                  ? checkLock('status')
-                  : openStatusModal(item)"
-                >
-                  {{ item.status }}
-                </button>
-
-                <button
-                  class="remove-btn"
-                  @click="deleteRow(index)"
-                >
-                  ×
-                </button>
-
-              </div>
-            </td>
-
-            <td
-              class="sticky-name">
-              <input 
-                v-model="item.name" 
-                :readonly="columnLock.name"
-                @click="checkLock('name')"
-              />
-
-            </td>
-
-            <td>
-              <input
-                type="number"
-                v-model.number="item.previous"
-                :readonly="columnLock.previous"
-                @click="checkLock('previous')"
-              />
-            </td>
-
-            <td class="sticky-add">
-              <input
-                type="number"
-                v-model.number="item.add"
-                :readonly="columnLock.add"
-                @click="checkLock('add')"
-              />
-            </td>
-
-            <td>
-              <input 
-                v-model="item.memo"
-                :readonly="columnLock.memo"
-                @click="checkLock('memo')"
-              />
-            </td>
+          <tr v-for="row in visibleRows" :key="row.id">
+            <td><button class="status" :class="row.status" :disabled="!editable('status')" @click="selected = row">
+              {{ row.status === 'pending' ? '未補充' : row.status === 'out_of_stock' ? '在庫無い為未補充' : '完了' }}
+            </button></td>
+            <td><input v-model="row.item_name" :data-live-field="liveFieldKey('d-rows',row.id,'item_name')" :disabled="!editable('name')" @input="schedule(row,'item_name',$event)" @blur="save(row,'item_name')" @compositionstart="composition(row,'item_name',true)" @compositionend="composition(row,'item_name',false,$event)" /></td>
+            <td><input v-model.number="row.max_quantity" :data-live-field="liveFieldKey('d-rows',row.id,'max_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('max_quantity')" @input="schedule(row,'max_quantity',$event)" @blur="save(row,'max_quantity')" /></td>
+            <td><input v-model.number="row.requested_quantity" :data-live-field="liveFieldKey('d-rows',row.id,'requested_quantity')" type="number" min="0" :max="POSTGRES_INTEGER_MAX" :disabled="!editable('requested_quantity')" @input="schedule(row,'requested_quantity',$event)" @blur="save(row,'requested_quantity')" /></td>
+            <td><input v-model="row.note" :data-live-field="liveFieldKey('d-rows',row.id,'note')" :disabled="!editable('note')" @input="schedule(row,'note',$event)" @blur="save(row,'note')" @compositionstart="composition(row,'note',true)" @compositionend="composition(row,'note',false,$event)" /></td>
+            <td v-if="canDelete"><button class="delete" @click="removeRow(row)">削除</button></td>
           </tr>
         </tbody>
       </table>
+    </div>
+    <div v-if="selected" class="modal-backdrop" @click.self="selected = null">
+      <div class="modal"><h4>補充状況を選択</h4>
+        <button @click="setStatus('pending')">未補充</button>
+        <button @click="setStatus('out_of_stock')">在庫無い為未補充</button>
+        <button @click="setStatus('completed')">完了</button>
+        <button class="cancel" @click="selected = null">キャンセル</button>
       </div>
     </div>
-
-    <div
-  v-if="showModal"
-  class="modal-overlay"
->
-  <div class="modal">
-    <button
-      class="modal-close"
-      @click="showModal = false"
-    >
-      ×
-    </button>
-
-    <h3>補充状況を選択</h3>
-
-    <button
-      class="status-option status-red"
-      @click="setStatus('未補充')"
-    >
-      未補充
-    </button>
-
-    <button
-      class="status-option status-gray"
-      @click="setStatus('在庫無い為未補充')"
-    >
-      在庫無い為未補充
-    </button>
-
-    <button
-      class="status-option status-green"
-      @click="setStatus('完了')"
-    >
-      完了
-    </button>
-  </div>
-</div>
   </div>
 </template>
 
 <style scoped>
-.d-table{
-  margin-bottom:40px;
-}
-
-.header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-bottom:20px;
-}
-
-.header-buttons{
-  display:flex;
-  gap:10px;
-}
-
-.prepare-btn{
-  background:#ef4444;
-  color:white;
-  border:none;
-  padding:10px 25px;
-  border-radius:6px;
-  cursor:pointer;
-}
-
-.prepare-btn.active{
-  background:#2563eb;
-}
-
-.clear-btn{
-  background:#6b7280;
-  color:white;
-  border:none;
-  padding:10px 25px;
-  border-radius:6px;
-  cursor:pointer;
-}
-
-.clear-btn:hover{
-  background:#4b5563;
-}
-
-.toolbar{
-  margin-bottom:15px;
-}
-
-.toolbar button{
-  padding:8px 15px;
-  cursor:pointer;
-}
-
-.table-container{
-  overflow-x:auto;
-  width:100%;
-}
-
-table{
-  width:max-content;
-  min-width:100%;
-  border-collapse:collapse;
-  background:white;
-}
-
-th,
-td{
-  border:1px solid #ddd;
-  padding:10px;
-  white-space:nowrap;
-}
-
-th{
-  background:#f3f5f8;
-  text-align:center;
-}
-
-input{
-  border:none;
-  outline:none;
-  background:transparent;
-  min-width:100px;
-  width:100%;
-  padding:4px;
-}
-
-.status-wrapper{
-  display:flex;
-  align-items:center;
-  gap:12px;
-}
-
-.status-btn{
-  color:white;
-  border:none;
-  padding:6px 12px;
-  border-radius:5px;
-  cursor:pointer;
-  min-width:120px;
-}
-
-.pending{
-  background:#ef4444;
-}
-
-.outstock{
-  background:#9ca3af;
-}
-
-.complete{
-  background:#22c55e;
-}
-
-.remove-btn{
-  background:none;
-  border:none;
-  color:#ef4444;
-  font-size:22px;
-  cursor:pointer;
-}
-
-.modal-overlay{
-  position:fixed;
-  inset:0;
-  background:rgba(0,0,0,.4);
-  z-index:1000;
-
-  display:flex;
-  justify-content:center;
-  align-items:center;
-}
-
-.modal{
-  position:relative;
-
-  background:white;
-  padding:30px;
-  border-radius:10px;
-  width:320px;
-
-  display:flex;
-  flex-direction:column;
-  gap:12px;
-
-  z-index:1002;
-}
-.modal-close{
-  position:absolute;
-  top:8px;
-  right:12px;
-
-  border:none;
-  background:none;
-
-  font-size:28px;
-  cursor:pointer;
-
-  color:#555;
-}
-
-.modal-close:hover{
-  color:#000;
-}
-
-.status-option{
-  border:none;
-  padding:12px;
-  border-radius:6px;
-  color:white;
-  cursor:pointer;
-}
-
-.status-red{
-  background:#ef4444;
-}
-
-.status-gray{
-  background:#9ca3af;
-}
-
-.status-green{
-  background:#22c55e;
-}
-
-.lock-icon{
-  margin-left:6px;
-  width:22px;
-  height:22px;
-  border-radius:50%;
-  border:none;
-  background:white;
-  box-shadow:
-    0 1px 4px rgba(0,0,0,.25);
-  font-size:13px;
-  cursor:pointer;
-  display:inline-flex;
-  justify-content:center;
-  align-items:center;
-  vertical-align:middle;
-}
-
-/* ロック時入力不可 */
-input[readonly]{
-  cursor:not-allowed;
-  background:#f3f4f6;
-}
-
-/* 警告 */
-.lock-warning{
-  position:sticky;
-  top:0;
-  z-index:2000;
-  background:#fee2e2;
-  color:#dc2626;
-  border:1px solid #dc2626;
-  padding:12px;
-  text-align:center;
-  font-weight:bold;
-  margin-bottom:10px;
-  border-radius:6px;
-}
-
-.mode-popup{
-  position:sticky;
-  top:0;
-  z-index:1999;
-  background:#dbeafe;
-  color:#1d4ed8;
-  border:1px solid #2563eb;
-  padding:12px;
-  text-align:center;
-  font-weight:bold;
-  margin-bottom:10px;
-  border-radius:6px;
-}
-
+.d-table{position:relative;margin-bottom:28px}.header,.actions,.toolbar{display:flex;align-items:center}.header{justify-content:space-between;gap:16px}.header h3{font-size:20px}.actions{gap:8px}.toolbar{margin:10px 0}.toolbar button,.prepare,.clear{border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}.toolbar button{background:#2563eb;color:#fff}.prepare{background:#e2e8f0}.prepare.active{background:#f59e0b;color:#fff}.clear,.delete{background:#fee2e2;color:#b91c1c}.table-wrap{overflow:auto}table{width:100%;min-width:850px;border-collapse:collapse}th,td{border:1px solid #dbe4ee;padding:8px;text-align:center}th{background:#f8fafc}.lock{border:0;background:transparent;cursor:pointer}input{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px}.status{width:100%;border:0;border-radius:18px;padding:8px;font-weight:700;cursor:pointer}.status.pending{background:#fef3c7;color:#92400e}.status.out_of_stock{background:#fee2e2;color:#b91c1c}.status.completed{background:#dcfce7;color:#166534}.delete{border:0;border-radius:6px;padding:7px}.popup{position:fixed;top:24px;left:50%;z-index:1000;transform:translateX(-50%);background:#172033;color:white;padding:12px 20px;border-radius:8px}.modal-backdrop{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;background:#0007}.modal{display:grid;gap:10px;width:min(360px,90vw);padding:24px;border-radius:14px;background:white}.modal button{padding:12px;border:0;border-radius:8px}.cancel{background:#e2e8f0}button:disabled,input:disabled{cursor:not-allowed;opacity:.55}
 </style>

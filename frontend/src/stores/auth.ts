@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api } from '@/lib/api'
 import { supabase } from '@/lib/supabase'
-import type { AppUser, MeResponse, Role } from '@/lib/types'
+import type { AppUser, MeResponse, Role, StoreAssignment } from '@/lib/types'
 
 export const useAuthStore = defineStore('auth', () => {
   const initialized = ref(false)
@@ -10,15 +10,18 @@ export const useAuthStore = defineStore('auth', () => {
   const role = ref<string | null>(null)
   const roleDetail = ref<Role | null>(null)
   const user = ref<AppUser | null>(null)
+  const storeAssignments = ref<StoreAssignment[]>([])
 
   const isAuthenticated = computed(() => Boolean(user.value))
   const canManage = computed(() => role.value === 'admin')
+  const canManageLocks = computed(() => role.value === 'admin' || role.value === 'leader')
   const canEditReports = computed(() => ['admin', 'leader', 'sub_leader'].includes(role.value || ''))
 
   function reset() {
     role.value = null
     roleDetail.value = null
     user.value = null
+    storeAssignments.value = []
   }
 
   async function fetchMe() {
@@ -26,7 +29,22 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = data.user
     roleDetail.value = data.role
     role.value = data.role.code
+    storeAssignments.value = data.store_assignments
     return data
+  }
+
+  function canViewStore(storeId: number) {
+    return role.value === 'admin' || role.value === 'leader' || storeAssignments.value.some(
+      (assignment) => assignment.store_id === storeId && assignment.can_view,
+    )
+  }
+
+  function canEditStore(storeId: number) {
+    return role.value === 'admin' || role.value === 'leader' || (
+      canEditReports.value && storeAssignments.value.some(
+        (assignment) => assignment.store_id === storeId && assignment.can_edit,
+      )
+    )
   }
 
   async function initialize() {
@@ -72,9 +90,13 @@ export const useAuthStore = defineStore('auth', () => {
     role,
     roleDetail,
     user,
+    storeAssignments,
     isAuthenticated,
     canManage,
+    canManageLocks,
     canEditReports,
+    canViewStore,
+    canEditStore,
     initialize,
     fetchMe,
     login,

@@ -1,726 +1,263 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { boardService } from '@/lib/services'
+import { compareBoardOrder, nextBoardOrder } from '@/lib/boardOrder'
+import { readInputValue } from '@/lib/liveInput'
+import { liveFieldKey, useLiveBoard } from '@/composables/useLiveBoard'
+import { createAutosaveQueue } from '@/lib/autosave'
+import type { MDTableCell, MDTableColumn, MDTableLock, MDTableRow } from '@/lib/types'
 
-// 列ロック状態
-const columnLock = ref({
-  status:false,
-  name:false,
-  previous:false,
-  add:false,
-  memo:false
-})
-
-// ロック切替
-function toggleLock(column:string){
-  columnLock.value[column] =
-    !columnLock.value[column]
-}
-
-// ロック警告
-function checkLock(column:string){
-  if(columnLock.value[column]){
-    showLockMessage()
-  }
-}
-
-defineProps<{
+const props = defineProps<{
   title: string
+  floorGroup: 'first' | 'second' | 'third'
+  rows: MDTableRow[]
+  columns: MDTableColumn[]
+  cells: MDTableCell[]
+  locks: MDTableLock[]
+  canEditStructure: boolean
+  canSelectBooth: boolean
+  canManageLocks: boolean
+  canDelete: boolean
+  canEditBooth: (booth: string) => boolean
 }>()
+const emit = defineEmits<{ refresh: []; error: [message: string] }>()
 
-interface RestockItem {
-  boothType: string
-  booth: string
-  customBooth: string
-
-  name: string
-  previous: number
-  add: number
-  memo: string
-  status: string
-
-  extra: string[]
-}
-
-const items = ref<RestockItem[]>([
-  {
-  boothType: "",
-  booth: "",
-  customBooth: "",
-
-  name: "",
-  previous: 0,
-  add: 0,
-  memo: "",
-  status: "ブース",
-
-  extra:[""]
-  }
-])
-
-const columns = ref([
-  { title: "商品名1" }
-])
-
-function addRow() {
-  items.value.push({
-    boothType:"",
-    booth:"",
-    customBooth:"",
-
-    name:"",
-    previous:0,
-    add:0,
-    memo:"",
-    status:"ブース",
-
-    extra:new Array(columns.value.length).fill("")
-  })
-}
-
-function addColumn() {
-  columns.value.push({
-    title: `商品名${columns.value.length + 1}`
-  })
-
-  items.value.forEach(item => {
-    item.extra.push("")
-  })
-}
-
-function deleteColumn(index: number) {
-
-  const result = confirm("この列を削除しますか？")
-  if (!result) return
-
-  // 見出し削除
-  columns.value.splice(index, 1)
-
-  // 全行の同じ列も削除
-  items.value.forEach(item => {
-    item.extra.splice(index, 1)
-  })
-}
-
-function deleteRow(index: number) {
-  const result = confirm("この行を削除しますか？")
-  if (!result) return
-  items.value.splice(index, 1)
-}
-
-function clearData() {
-  const result = confirm(
-    "書き込まれている食数を一斉クリアしますか？"
-  )
-  if (!result) return
-
-  items.value.forEach(item => {
-  // 追加した列の内容をすべて空白にする
-  item.extra = item.extra.map(() => "")
-  })
-}
-
-const lockMessage = ref(false)
-
-function showLockMessage(){
-  lockMessage.value=true
-  setTimeout(()=>{
-    lockMessage.value=false
-  },2000)
-}
-
-const boothPopup = ref<number | null>(null)
-
-function toggleBooth(index:number){
-  boothPopup.value =
-    boothPopup.value===index ? null : index
-}
-
-function selectBooth(item: RestockItem, booth: string) {
-  item.booth = booth
-
-  if (booth !== "その他") {
-    boothPopup.value = null
-  }
-}
-
-function confirmCustomBooth(item: RestockItem) {
-  // 未入力なら何もしない
-  if (item.customBooth.trim() === "") return
-
-  // 表示用に「その他」のままにしておく
-  item.booth = "その他"
-
-  // ポップアップを閉じる
-  boothPopup.value = null
-}
+const localRows = ref<MDTableRow[]>([])
+const localColumns = ref<MDTableColumn[]>([])
+const values = ref<Record<string, string>>({})
+const popupRowId = ref<number | null>(null)
+const autosave = createAutosaveQueue()
+const composing = new Set<string>()
+const live = useLiveBoard()
 
 const boothGroups = {
-  first:[
-    "CSL",
-    "VIP(ブルー)",
-    "VIP(レッド)",
-    "その他"
-  ],
-
-  second:[
-    "2-1",
-    "2-2",
-    "2-3",
-    "2-4",
-    "2-5",
-    "2-6",
-    "2-7",
-    "2-8"
-  ],
-
-  third:[
-    "3-1",
-    "3-3",
-    "3-5",
-    "3-7",
-    "3-9",
-    "3-11(スイートラウンジ)"
-  ]
+  first: ['CSL', 'VIP(ブルー)', 'VIP(レッド)', 'その他'],
+  second: ['2-1', '2-2', '2-3', '2-4', '2-5', '2-6', '2-7', '2-8'],
+  third: ['3-1', '3-3', '3-5', '3-7', '3-9', '3-11(スイートラウンジ)'],
 }
 
+const boothLocked = computed(() => props.locks.some((lock) => lock.column_key === 'booth' && lock.is_locked))
+const sortedRows = computed(() => [...localRows.value].sort(compareBoardOrder))
+const sortedColumns = computed(() => [...localColumns.value].sort(compareBoardOrder))
+
+watch(() => props.rows, (rows) => {
+  localRows.value = rows.map((incoming) => {
+    const current = localRows.value.find((row) => row.id === incoming.id)
+    const liveValue = live?.getValue('md-rows', incoming.id, 'custom_booth')
+    if (liveValue !== undefined) return { ...incoming, custom_booth: String(liveValue) }
+    return current && autosave.has(`row:${incoming.id}:custom_booth`) ? { ...incoming, custom_booth: current.custom_booth } : { ...incoming }
+  })
+}, { immediate: true, deep: true })
+watch(() => props.columns, (columns) => {
+  localColumns.value = columns.map((incoming) => {
+    const current = localColumns.value.find((column) => column.id === incoming.id)
+    const liveValue = live?.getValue('md-columns', incoming.id, 'title')
+    if (liveValue !== undefined) return { ...incoming, title: String(liveValue) }
+    return current && autosave.has(`column:${incoming.id}:title`) ? { ...incoming, title: current.title } : { ...incoming }
+  })
+}, { immediate: true, deep: true })
+watch(() => props.cells, (cells) => {
+  for (const cell of cells) {
+    const cellKey = key(cell.row_id, cell.column_id)
+    const liveValue = live?.getValue('md-cells', cell.id, 'value', { row_id: cell.row_id, column_id: cell.column_id })
+    if (liveValue !== undefined) values.value[cellKey] = String(liveValue)
+    else if (!autosave.has(cellKey)) values.value[cellKey] = cell.value
+  }
+}, { immediate: true, deep: true })
+
+function key(rowId: number, columnId: number) { return `cell:${rowId}:${columnId}` }
+function displayBooth(row: MDTableRow) { return row.booth === 'その他' ? row.custom_booth || 'その他' : row.booth || 'ブース' }
+function rowEditable(row: MDTableRow) { return props.canEditBooth(row.booth) }
+
+function scheduleCell(rowId: number, columnId: number, event?: Event) {
+  const cellKey = key(rowId, columnId)
+  if (event) values.value[cellKey] = String(readInputValue(event))
+  if (live) {
+    const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
+    const update = composing.has(cellKey) ? live.preview : live.edit
+    update('md-cells', existing?.id ?? 0, 'value', values.value[cellKey] ?? '', {
+      row_id: rowId,
+      column_id: columnId,
+    })
+    return
+  }
+  if (composing.has(cellKey)) return
+  autosave.schedule(cellKey, async () => {
+    const existing = props.cells.find((cell) => cell.row_id === rowId && cell.column_id === columnId)
+    if (existing) await boardService.update('meal-drink', 'md-cells', existing.id, { value: values.value[cellKey] ?? '' })
+    else await boardService.create('meal-drink', 'md-cells', { row_id: rowId, column_id: columnId, value: values.value[cellKey] ?? '' })
+  }, {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、食数の保存を再試行します。'
+      : '食数を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+
+function saveCell(rowId: number, columnId: number) {
+  if (live) {
+    const existing = props.cells.find(cell => cell.row_id === rowId && cell.column_id === columnId)
+    live.flush('md-cells', existing?.id ?? 0, 'value', { row_id: rowId, column_id: columnId })
+    return
+  }
+  const cellKey = key(rowId, columnId)
+  if (!autosave.has(cellKey)) scheduleCell(rowId, columnId)
+  autosave.flush(cellKey)
+}
+
+async function saveRow(row: MDTableRow, fields: Record<string, unknown>) {
+  try { await boardService.update('meal-drink', 'md-rows', row.id, fields) }
+  catch { emit('error', '売店名を保存できませんでした。') }
+}
+
+function scheduleCustomBooth(row: MDTableRow, event?: Event) {
+  const timerKey = `row:${row.id}:custom_booth`
+  if (event) row.custom_booth = String(readInputValue(event))
+  if (live) {
+    const update = composing.has(`row:${row.id}`) ? live.preview : live.edit
+    update('md-rows', row.id, 'custom_booth', row.custom_booth)
+    return
+  }
+  if (composing.has(`row:${row.id}`)) return
+  autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-rows', row.id, { custom_booth: row.custom_booth }), {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、その他売店名の保存を再試行します。'
+      : 'その他売店名を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+function saveCustomBooth(row: MDTableRow) {
+  if (live) { live.flush('md-rows', row.id, 'custom_booth'); return }
+  const timerKey = `row:${row.id}:custom_booth`
+  if (!autosave.has(timerKey)) scheduleCustomBooth(row)
+  autosave.flush(timerKey)
+}
+
+function selectBooth(row: MDTableRow, booth: string) {
+  row.booth = booth
+  if (booth !== 'その他') {
+    row.custom_booth = ''
+    popupRowId.value = null
+  }
+  void saveRow(row, { booth, custom_booth: row.custom_booth })
+}
+
+async function addRow() {
+  try {
+    await boardService.create('meal-drink', 'md-rows', { floor_group: props.floorGroup, booth_type: props.floorGroup, booth: '', custom_booth: '', sort_order: nextBoardOrder(localRows.value) })
+    emit('refresh')
+  } catch { emit('error', '行を追加できませんでした。') }
+}
+
+async function addColumn() {
+  try {
+    await boardService.create('meal-drink', 'md-columns', { floor_group: props.floorGroup, title: `商品名${localColumns.value.length + 1}`, sort_order: nextBoardOrder(localColumns.value) })
+    emit('refresh')
+  } catch { emit('error', '列を追加できませんでした。') }
+}
+
+function scheduleColumn(column: MDTableColumn, event?: Event) {
+  const timerKey = `column:${column.id}:title`
+  if (event) column.title = String(readInputValue(event))
+  if (live) {
+    const update = composing.has(`column:${column.id}`) ? live.preview : live.edit
+    update('md-columns', column.id, 'title', column.title)
+    return
+  }
+  if (composing.has(`column:${column.id}`)) return
+  autosave.schedule(timerKey, () => boardService.update('meal-drink', 'md-columns', column.id, { title: column.title }), {
+    onError: (willRetry) => emit('error', willRetry
+      ? '通信が不安定なため、列名の保存を再試行します。'
+      : '列名を保存できませんでした。内容を確認してもう一度入力してください。'),
+  })
+}
+function saveColumn(column: MDTableColumn) {
+  if (live) { live.flush('md-columns', column.id, 'title'); return }
+  const timerKey = `column:${column.id}:title`
+  if (!autosave.has(timerKey)) scheduleColumn(column)
+  autosave.flush(timerKey)
+}
+
+async function remove(resource: 'md-rows' | 'md-columns', id: number, label: string) {
+  if (!confirm(`この${label}を削除しますか？`)) return
+  if (resource === 'md-rows') {
+    autosave.cancelMatching((timerKey) => timerKey.startsWith(`row:${id}:`) || timerKey.startsWith(`cell:${id}:`))
+  } else {
+    autosave.cancelMatching((timerKey) => timerKey.startsWith(`column:${id}:`) || timerKey.endsWith(`:${id}`))
+  }
+  live?.cancel(resource, id)
+  const beforeRows = localRows.value
+  const beforeColumns = localColumns.value
+  if (resource === 'md-rows') localRows.value = localRows.value.filter((row) => row.id !== id)
+  else localColumns.value = localColumns.value.filter((column) => column.id !== id)
+  try { await boardService.remove('meal-drink', resource, id); emit('refresh') }
+  catch {
+    localRows.value = beforeRows
+    localColumns.value = beforeColumns
+    emit('error', `${label}を削除できませんでした。`)
+  }
+}
+
+async function toggleLock() {
+  try { await boardService.lock('meal-drink', { floor_group: props.floorGroup, column_key: 'booth', is_locked: !boothLocked.value }); emit('refresh') }
+  catch { emit('error', '売店列のロックを変更できませんでした。') }
+}
+
+async function clearData() {
+  if (!confirm('書き込まれている食数を一斉クリアしますか？')) return
+  try { await boardService.clear('meal-drink', { floor_group: props.floorGroup }); emit('refresh') }
+  catch { emit('error', '食数をクリアできませんでした。') }
+}
+
+onBeforeUnmount(() => {
+  unsubscribeLive?.()
+  autosave.flushAll()
+  autosave.stop()
+})
+
+const unsubscribeLive = live?.subscribe((change) => {
+  if (change.resource === 'md-rows' && change.field === 'custom_booth') {
+    const row = localRows.value.find((item) => item.id === change.recordId)
+    if (row) row.custom_booth = String(change.value ?? '')
+  } else if (change.resource === 'md-columns' && change.field === 'title') {
+    const column = localColumns.value.find((item) => item.id === change.recordId)
+    if (column) column.title = String(change.value ?? '')
+  } else if (change.resource === 'md-cells' && change.field === 'value') {
+    const cell = props.cells.find((item) => item.id === change.recordId)
+    const rowId = change.relations?.row_id ?? cell?.row_id
+    const columnId = change.relations?.column_id ?? cell?.column_id
+    if (rowId && columnId) values.value[key(rowId, columnId)] = String(change.value ?? '')
+  }
+})
 </script>
 
 <template>
   <div class="md-table">
-
-    <div
-      v-if="lockMessage"
-      class="lock-warning"
-      >
-      編集したい場合はロックを解除してください
-    </div>
-
-    <div class="header">
-          <h3>{{ title }}</h3>
-
-      <div class="header-buttons">
-
-  <button
-    class="clear-btn"
-    @click="clearData"
-  >
-    クリア
-  </button>
-
-  </div>
-</div>
-
-    <div class="toolbar">
-      <button @click="addRow">
-        ＋行追加
-      </button>
-
-      <button @click="addColumn">
-        ＋列追加
-      </button>
-    </div>
-
-<div class="table-wrapper">
-    <div class="table-container">
-      <table>
-        <thead>
-          <tr>
-            <th>
-              売店名
-              <button
-                class="lock-icon"
-                @click="toggleLock('status')"
-              >
-                {{ columnLock.status ? "🔒" : "🔓" }}
-              </button>
-            </th>
-           
-            <th
-              v-for="(column,index) in columns"
-              :key="index"
-              class="dynamic-column"
-            >
-              <div class="column-header">
-
-                <input
-                  v-model="column.title"
-                  class="column-title"
-                />
-
-                <button
-                  class="delete-column-btn"
-                  @click="deleteColumn(index)"
-                >
-                  ×
-                </button>
-
-  </div>
-</th>
-          </tr>
-        </thead>
-
-        <tbody>
-          <tr
-            v-for="(item,index) in items"
-            :key="index"
-          >
-
-<td class="booth-cell">
-
-  <button
-    class="booth-btn"
-    @click="
-      columnLock.status
-        ? checkLock('status')
-        : toggleBooth(index)
-    "
-  >
-    ブース
-  </button>
-
-  <span class="selected-booth">
-    {{
-      item.booth==="その他"
-      ? item.customBooth
-      : item.booth
-    }}
-  </span>
-
-  <div
-    v-if="boothPopup===index"
-    class="booth-popup"
-  >
-
-    <div class="popup-title">
-      階数
-    </div>
-
-    <div class="floor-buttons">
-      <button
-        :class="{ active:item.boothType==='first' }"
-        @click="item.boothType='first'"
-      >
-        1階
-      </button>
-
-      <button
-        :class="{ active:item.boothType==='second' }"
-        @click="item.boothType='second'"
-      >
-        2階
-      </button>
-
-      <button
-        :class="{ active:item.boothType==='third' }"
-        @click="item.boothType='third'"
-      >
-        3階
-      </button>
-
-</div>
-
-    <hr>
-
-    <template
-      v-if="item.boothType==='first'"
-    >
-      <div class="booth-list">
-        <button
-          v-for="b in boothGroups.first"
-          :key="b"
-          @click="selectBooth(item, b)"
-        >
-          {{ b }}
-        </button>
-      </div>
-    </template>
-
-    <template
-      v-if="item.boothType==='second'"
-    >
-      <div class="booth-list">
-        <button
-          v-for="b in boothGroups.second"
-          :key="b"
-          @click="selectBooth(item, b)"
-        >
-          {{ b }}
-        </button>
-      </div>
-    </template>
-
-    <template
-      v-if="item.boothType==='third'"
-    >
-      <div class="booth-list">
-        <button
-          v-for="b in boothGroups.third"
-          :key="b"
-          @click="selectBooth(item, b)"
-        >
-          {{ b }}
-        </button>
-      </div>
-    </template>
-
-   <div
-  v-if="item.booth === 'その他'"
-  class="custom-booth"
->
-  <input
-    v-model="item.customBooth"
-    :readonly="columnLock.status"
-    @click="columnLock.status && checkLock('status')"
-    placeholder="売店名を入力"
-  />
-
-  <button
-    class="ok-btn"
-    @click="confirmCustomBooth(item)"
-  >
-    OK
-  </button>
-</div>
-
-  </div>
-
-  <button
-    class="remove-btn"
-    @click="
-      columnLock.status
-        ? checkLock('status')
-        : deleteRow(index)
-    "
-  >
-    ×
-  </button>
-
-</td>
-
-<td
-  v-for="(cell,colIndex) in item.extra"
-  :key="colIndex"
->
-  <input
-    v-model="item.extra[colIndex]"
-  />
-</td>
-          </tr>
-        </tbody>
-      </table>
-      </div>
-    </div>
+    <div class="header"><h3>{{ title }}</h3><button v-if="canDelete" class="clear" @click="clearData">クリア</button></div>
+    <div v-if="canEditStructure" class="toolbar"><button @click="addRow">＋行追加</button><button @click="addColumn">＋列追加</button></div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th class="booth-head">売店 <button class="lock" :disabled="!canManageLocks" @click="toggleLock">{{ boothLocked ? '🔒' : '🔓' }}</button></th>
+        <th v-for="column in sortedColumns" :key="column.id">
+          <input v-model="column.title" :data-live-field="liveFieldKey('md-columns',column.id,'title')" :disabled="!canEditStructure" @input="scheduleColumn(column,$event)" @blur="saveColumn(column)" @compositionstart="composing.add(`column:${column.id}`);live?.beginComposition('md-columns',column.id,'title')" @compositionend="composing.delete(`column:${column.id}`);scheduleColumn(column,$event)" />
+          <button v-if="canDelete" class="small-delete" @click="remove('md-columns', column.id, '列')">×</button>
+        </th><th v-if="canDelete"></th>
+      </tr></thead>
+      <tbody><tr v-for="row in sortedRows" :key="row.id">
+        <td class="booth-cell">
+          <button class="booth" :disabled="boothLocked || !canSelectBooth" @click="popupRowId = popupRowId === row.id ? null : row.id">{{ displayBooth(row) }} ▾</button>
+          <div v-if="popupRowId === row.id" class="booth-popup">
+            <button v-for="booth in boothGroups[floorGroup]" :key="booth" :disabled="!canEditBooth(booth)" @click="selectBooth(row, booth)">{{ booth }}</button>
+            <div v-if="row.booth === 'その他'" class="custom"><input v-model="row.custom_booth" :data-live-field="liveFieldKey('md-rows',row.id,'custom_booth')" placeholder="売店名" @input="scheduleCustomBooth(row,$event)" @blur="saveCustomBooth(row)" @compositionstart="composing.add(`row:${row.id}`);live?.beginComposition('md-rows',row.id,'custom_booth')" @compositionend="composing.delete(`row:${row.id}`);scheduleCustomBooth(row,$event)" /><button @click="popupRowId = null">決定</button></div>
+          </div>
+        </td>
+        <td v-for="column in sortedColumns" :key="column.id">
+          <input v-model="values[key(row.id,column.id)]" :data-live-field="liveFieldKey('md-cells',props.cells.find(cell => cell.row_id === row.id && cell.column_id === column.id)?.id ?? 0,'value',{row_id:row.id,column_id:column.id})" inputmode="numeric" :disabled="!rowEditable(row)" @input="scheduleCell(row.id,column.id,$event)" @blur="saveCell(row.id,column.id)" @compositionstart="composing.add(key(row.id,column.id));live?.beginComposition('md-cells',0,'value',{row_id:row.id,column_id:column.id})" @compositionend="composing.delete(key(row.id,column.id));scheduleCell(row.id,column.id,$event)" />
+        </td>
+        <td v-if="canDelete"><button class="small-delete" @click="remove('md-rows', row.id, '行')">削除</button></td>
+      </tr></tbody>
+    </table></div>
   </div>
 </template>
 
 <style scoped>
-.d-table{
-  margin-bottom:40px;
-}
-
-.header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-bottom:20px;
-}
-
-.header-buttons{
-  display:flex;
-  gap:10px;
-}
-
-.clear-btn{
-  background:#6b7280;
-  color:white;
-  border:none;
-  padding:10px 25px;
-  border-radius:6px;
-  cursor:pointer;
-}
-
-.clear-btn:hover{
-  background:#4b5563;
-}
-
-.toolbar{
-  margin-bottom:15px;
-}
-
-.toolbar button{
-  padding:8px 15px;
-  cursor:pointer;
-}
-
-.table-container{
-  overflow-x:auto;
-  overflow-y:visible;
-  width:100%;
-}
-
-table{
-  width:max-content;
-  min-width:100%;
-  border-collapse:collapse;
-  background:white;
-}
-
-th,
-td{
-  border:1px solid #ddd;
-  padding:10px;
-  white-space:nowrap;
-}
-
-th{
-  background:#f3f5f8;
-  text-align:center;
-}
-
-input{
-  border:none;
-  outline:none;
-  background:transparent;
-  min-width:100px;
-  width:100%;
-  padding:4px;
-}
-
-.remove-btn{
-  background:none;
-  border:none;
-  color:#ef4444;
-  font-size:22px;
-  cursor:pointer;
-}
-
-.lock-icon{
-  margin-left:6px;
-  width:22px;
-  height:22px;
-  border-radius:50%;
-  border:none;
-  background:white;
-  box-shadow:
-    0 1px 4px rgba(0,0,0,.25);
-  font-size:13px;
-  cursor:pointer;
-  display:inline-flex;
-  justify-content:center;
-  align-items:center;
-  vertical-align:middle;
-}
-
-/* ロック時入力不可 */
-input[readonly]{
-  cursor:not-allowed;
-  background:#f3f4f6;
-}
-
-/* 警告 */
-.lock-warning{
-  position:sticky;
-  top:0;
-  z-index:2000;
-  background:#fee2e2;
-  color:#dc2626;
-  border:1px solid #dc2626;
-  padding:12px;
-  text-align:center;
-  font-weight:bold;
-  margin-bottom:10px;
-  border-radius:6px;
-}
-
-.booth-cell{
-  position:relative;
-  min-width:220px;
-}
-
-.booth-btn{
-  background:#2563eb;
-  color:white;
-  border:none;
-  border-radius:6px;
-  padding:8px 14px;
-  font-weight:bold;
-  cursor:pointer;
-}
-
-.selected-booth{
-  margin-left:10px;
-  font-weight:bold;
-  display:inline-block;
-  max-width:130px;
-  word-break:break-word;
-}
-
-.booth-popup{
-  position:absolute;
-  top:42px;
-  left:0;
-
-  width:320px;
-
-  background:#fff;
-  border:1px solid #d1d5db;
-  border-radius:12px;
-
-  padding:16px;
-
-  box-shadow:0 10px 25px rgba(0,0,0,.18);
-
-  display:flex;
-  flex-direction:column;
-  gap:14px;
-
-  z-index:99999;
-}
-
-.popup-title{
-  font-size:15px;
-  font-weight:bold;
-  margin-bottom:4px;
-}
-
-.booth-popup button.active{
-  background:#2563eb;
-  color:white;
-  font-weight:bold;
-}
-
-.custom-booth{
-  width:100%;
-  display:flex;
-  gap:8px;
-  margin-top:10px;
-}
-
-.custom-booth input{
-  flex:1;
-}
-
-.ok-btn{
-  padding:6px 14px;
-  border:none;
-  border-radius:6px;
-  background:#2563eb;
-  color:white;
-  cursor:pointer;
-}
-
-.ok-btn:hover{
-  background:#1d4ed8;
-}
-
-.column-title{
-  width:100%;
-  text-align:center;
-  border:none;
-  background:transparent;
-  font-weight:bold;
-  font-size:15px;
-}
-
-.floor-buttons{
-  display:grid;
-  grid-template-columns:repeat(3,1fr);
-  gap:8px;
-}
-
-.booth-list{
-  display:grid;
-  grid-template-columns:repeat(2,1fr);
-  gap:8px;
-}
-
-.booth-popup button{
-  padding:8px 10px;
-  border:none;
-  border-radius:8px;
-  background:#f3f4f6;
-  cursor:pointer;
-  transition:.2s;
-}
-
-.booth-popup button:hover{
-  background:#dbeafe;
-}
-
-.table-section{
-  position: relative;
-  background:#fff;
-  border-radius:16px;
-  padding:28px;
-  margin-bottom:40px;
-  border:1px solid #e5e7eb;
-  box-shadow:
-    0 4px 12px rgba(0,0,0,.05);
-  overflow: visible;
-}
-
-.table-section h2{
-  display:inline-block;
-  margin:0 0 20px;
-  padding:8px 18px;
-  background:#2563eb;
-  color:white;
-  border-radius:999px;
-  font-size:18px;
-  font-weight:700;
-}
-
-.booth-popup{
-  position:absolute;
-  top:48px;
-  left:0;
-  width:340px;
-  background:white;
-  border-radius:14px;
-  border:1px solid #d1d5db;
-  box-shadow:
-      0 18px 50px rgba(0,0,0,.25);
-  padding:18px;
-  z-index:99999;
-}
-
-.booth-popup::before{
-    content:"";
-    position:absolute;
-    top:-10px;
-    left:25px;
-    border-left:10px solid transparent;
-    border-right:10px solid transparent;
-    border-bottom:10px solid white;
-}
-
-.dynamic-column{
-  min-width:150px;
-}
-
-.column-header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:6px;
-}
-
-.delete-column-btn{
-  width:22px;
-  height:22px;
-
-  border:none;
-  background:none;
-
-  color:#ef4444;
-  font-size:18px;
-
-  cursor:pointer;
-  border-radius:50%;
-}
-
-.delete-column-btn:hover{
-  background:#fee2e2;
-}
-
+.md-table{position:relative}.header,.toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px}.header h3{font-size:21px}.toolbar{justify-content:flex-start;margin-bottom:12px}.toolbar button{border:0;border-radius:8px;background:#2563eb;color:#fff;padding:9px 14px;font-weight:700}.clear,.small-delete{border:0;border-radius:7px;background:#fee2e2;color:#b91c1c;padding:8px}.table-wrap{overflow:auto}table{width:100%;min-width:700px;border-collapse:collapse}th,td{position:relative;border:1px solid #dbe4ee;padding:8px;text-align:center}th{background:#f8fafc}th input,td>input{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px}.booth-head,.booth-cell{min-width:190px}.booth{width:100%;border:0;border-radius:7px;background:#e0f2fe;padding:9px;font-weight:700}.lock{border:0;background:transparent}.booth-popup{position:absolute;top:48px;left:8px;z-index:50;display:grid;width:220px;padding:8px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;box-shadow:0 12px 28px #0f172a26}.booth-popup>button{border:0;background:white;padding:9px;text-align:left}.custom{display:flex;gap:5px}.custom input{min-width:0}.small-delete{margin-top:5px}button:disabled,input:disabled{opacity:.55;cursor:not-allowed}
 </style>
