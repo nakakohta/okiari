@@ -3,15 +3,21 @@ services:
     build:
       context: ./backend
     container_name: backend
+    env_file: .env
     ports:
-      - "8000:8000"
+      - "18000:8000"
     volumes:
       - ./backend:/app
+      - /app/.venv
 
   frontend:
     build:
       context: ./frontend
     container_name: frontend
+    environment:
+      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?Set VITE_SUPABASE_URL in .env}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:?Set VITE_SUPABASE_PUBLISHABLE_KEY in .env}
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
     ports:
       - "5173:5173"
     volumes:
