@@ -46,3 +46,7 @@ __screenshots__/
 
 # Local Cloudflare development state
 .wrangler/
+
+# Local Python environments
+.venv/
+.venv_backup/
