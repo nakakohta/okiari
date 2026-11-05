@@ -84,3 +84,21 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+
+/* 明るい背景で文字が薄くならないようにする */
+:root {
+  color-scheme: light;
+
+  --color-background: #f4f6fa;
+  --color-background-soft: #ffffff;
+  --color-background-mute: #f2f4f8;
+
+  --color-heading: #1f2937;
+  --color-text: #1f2937;
+}
+
+body {
+  color: #1f2937;
+  background-color: #f4f6fa;
+}

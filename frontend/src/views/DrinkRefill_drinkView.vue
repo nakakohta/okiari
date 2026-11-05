@@ -55,5 +55,84 @@ onMounted(load)
 </template>
 
 <style scoped>
-.content{flex:1;min-width:0;padding:40px;background:#f5f7fa}.store-menu{position:sticky;top:15px;z-index:90;margin-bottom:28px;padding:18px;border:1px solid #e2e8f0;border-radius:12px;background:white;box-shadow:0 8px 22px #0f172a12}.menu-head{display:flex;align-items:center;justify-content:space-between}.menu-head h2{margin:0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}nav a{border-radius:7px;background:#2563eb;color:white;padding:7px 12px;text-decoration:none;font-weight:700}.store-section{scroll-margin-top:180px;margin-bottom:30px;padding:24px;border:1px solid #e2e8f0;border-radius:14px;background:#fff}.store-section>h2{padding-left:12px;border-left:5px solid #2563eb}.realtime{color:#b45309;font-size:13px;font-weight:700}.realtime.connected{color:#15803d}.error{padding:10px;background:#fee2e2;color:#b91c1c}.muted{color:#64748b}@media(max-width:700px){.content{padding:20px}}
+.content{
+  flex:1;min-width:0;padding:40px;background:#f5f7fa
+  }
+.store-menu{
+  position:sticky;top:15px;z-index:90;margin-bottom:28px;padding:18px;border:1px solid #e2e8f0;border-radius:12px;background:white;box-shadow:0 8px 22px #0f172a12
+  }
+.menu-head{
+  display:flex;align-items:center;justify-content:space-between
+}
+.menu-head h2{
+  margin:0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}nav a{border-radius:7px;background:#2563eb;color:white;padding:7px 12px;text-decoration:none;font-weight:700
+}
+.store-section{
+  scroll-margin-top:180px;margin-bottom:30px;padding:24px;border:1px solid #e2e8f0;border-radius:14px;background:#fff
+}
+.store-section>h2{
+  padding-left:12px;border-left:5px solid #2563eb
+}
+.realtime{
+  color:#b45309;font-size:13px;font-weight:700
+}
+.realtime.connected{
+  color:#15803d
+}
+.error{
+  padding:10px;background:#fee2e2;color:#b91c1c
+  }
+  .muted{
+    color:#64748b
+  }
+  @media(max-width:767px) {
+  .content {
+    width: 100%;
+    min-width: 0;
+    padding: 18px 12px 100px;
+    overflow-x: hidden;
+  }
+
+  .store-menu {
+    position: sticky;
+    top: 0;
+    padding: 12px;
+    margin-bottom: 16px;
+  }
+
+  .store-menu nav {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 8px;
+    padding-bottom: 5px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .store-menu nav a {
+    flex-shrink: 0;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+
+  .store-section {
+    padding: 14px;
+    margin-bottom: 18px;
+    scroll-margin-top: 100px;
+  }
+
+  .store-section > h2 {
+    font-size: 18px;
+  }
+
+  .menu-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .realtime {
+    font-size: 11px;
+  }
+}
+
 </style>
