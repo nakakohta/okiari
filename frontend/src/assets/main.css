@@ -1,27 +1,76 @@
+
 @import './base.css';
 
-* {
+/* =========================
+  全画面共通
+========================= */
+
+*,
+*::before,
+*::after {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
 }
 
+html {
+  width: 100%;
+  min-width: 0;
+}
+
 body {
+  width: 100%;
+  min-width: 0;
+  min-height: 100vh;
   background: #f4f6fa;
   font-family: sans-serif;
 }
 
-/* layout */
+#app {
+  width: 100%;
+  min-width: 0;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* 入力欄が画面幅を超えないようにする */
+input,
+select,
+textarea,
+button {
+  max-width: 100%;
+  font: inherit;
+}
+
+/* =========================
+   全体レイアウト
+========================= */
 
 .layout {
   display: flex;
+  width: 100%;
+  min-width: 0;
   min-height: 100vh;
 }
 
-/* sidebar */
+/* サイドバー以外の領域を伸縮可能にする */
+.layout > :not(.sidebar) {
+  flex: 1;
+  min-width: 0;
+}
+
+/* =========================
+   サイドバー
+========================= */
 
 .sidebar {
+  flex: 0 0 220px;
   width: 220px;
+  min-width: 0;
   background: #08122d;
   color: white;
   padding: 30px 20px;
@@ -46,18 +95,260 @@ body {
   margin-bottom: 12px;
   border-radius: 12px;
   cursor: pointer;
-  transition: 0.3s;
+  transition: background-color 0.3s;
 }
 
 /* hover */
-
 .sidebar li:hover {
   background: #1d2b52;
-  transform: translateX(5px);
 }
 
-/* active */
-
+/* 選択中のメニュー */
 .sidebar .active {
   background: #ff7a00;
+}
+
+/* =========================
+   タブレット・スマートフォン
+========================= */
+
+@media (max-width: 767px) {
+  html,
+  body,
+  #app {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* サイドバーを画面上部に配置する */
+  .layout {
+    flex-direction: column;
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    flex: none;
+    width: 100%;
+    padding: 16px;
+  }
+
+  .logo p {
+    margin-bottom: 16px;
+  }
+
+  /* メニューを折り返し可能にする */
+  .sidebar ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .sidebar li {
+    padding: 10px 12px;
+    margin-bottom: 0;
+  }
+
+  /* スマホでは横方向の移動アニメーションをなくす */
+  .sidebar li:hover {
+    transform: none;
+  }
+
+  /* 表が狭い画面からはみ出す場合に備える */
+  table {
+    max-width: 100%;
+  }
+
+  /* 入力欄は親要素の幅に合わせる */
+  input,
+  select,
+  textarea {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  /* 長い文字列による横はみ出しを防ぐ */
+  h1,
+  h2,
+  h3,
+  p,
+  td,
+  th {
+    overflow-wrap: anywhere;
+  }
+}
+
+
+/* ========================================
+   スマートフォン表示の修正
+======================================== */
+
+/* 明るい背景に合う文字色に統一 */
+html,
+body,
+#app {
+  color: #1f2937;
+}
+
+/* メインレイアウトを画面幅に合わせる */
+.layout {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* メインコンテンツの横はみ出しを防ぐ */
+.layout > * {
+  min-width: 0;
+}
+
+/* サイドバーの文字色は白に保つ */
+.sidebar {
+  color: #ffffff;
+}
+
+/* サイドバー内の通常の文字色 */
+.sidebar li,
+.sidebar a {
+  color: #ffffff;
+}
+
+/* ========================================
+  スマートフォン
+======================================== */
+
+/* スマートフォン表示 */
+
+/* スマートフォン：画面幅にぴったり合わせる */
+@media screen and (max-width: 767px) {
+  html,
+  body,
+  #app {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow-x: clip;
+  }
+
+  .layout {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* メイン画面の横はみ出しを防止 */
+  .layout > :not(.sidebar) {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  /* タイトルやカードが画面幅を超えないようにする */
+  h1,
+  h2,
+  h3,
+  p,
+  section,
+  article {
+    max-width: 100%;
+  }
+
+  /* 表は画面全体を広げず、表の領域内でスクロール */
+  .table-container,
+  .table-wrapper {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* サイドバーを画面幅いっぱいにする */
+  .layout .sidebar {
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    flex: 0 0 auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 16px !important;
+    overflow: visible !important;
+  }
+
+  /* ロゴ下の余白を縮める */
+  .sidebar .logo p {
+    margin-bottom: 16px !important;
+  }
+
+  /* メニューを折り返し可能にする */
+  .sidebar ul {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .sidebar li {
+    margin: 0 !important;
+    padding: 10px 12px !important;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  /* サイドバー下部のユーザー情報 */
+  .sidebar .user-info,
+  .sidebar .sidebar-footer {
+    margin-top: 16px;
+  }
+
+  /* メイン領域を下に配置 */
+  .layout > :not(.sidebar) {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  /* 横スクロールが必要な表は表の領域内で処理 */
+  .table-container,
+  .table-wrapper {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    max-width: 100%;
+  }
+
+  /* 入力欄とボタン */
+  input,
+  select,
+  textarea,
+  button {
+    max-width: 100%;
+  }
+
+  
+/* スマートフォン：ボトムナビゲーション分の余白 */
+@media screen and (max-width: 767px) {
+  body {
+    padding-bottom: 0;
+  }
+
+  #app {
+    min-height: 100vh;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+}
+
 }
