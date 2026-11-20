@@ -95,51 +95,56 @@ onMounted(load)
 
       <section class="panel form-panel">
         <h2>{{ editingId ? '権限を編集' : '権限を追加' }}</h2>
-        <form @submit.prevent="saveRole">
-          <label>
-            コード
-            <input v-model="code" type="text" :disabled="Boolean(editingId && basicRoles.has(code))" required />
-          </label>
-          <label>
-            表示名
-            <input v-model="name" type="text" required />
-          </label>
-          <label>
-            説明
-            <input v-model="description" type="text" />
-          </label>
-          <div class="actions">
-            <button v-if="editingId" type="button" class="secondary" @click="resetForm">キャンセル</button>
-            <button type="submit" :disabled="saving">{{ saving ? '保存中...' : '保存' }}</button>
-          </div>
-        </form>
+
+        <div class="permission-form-scroll">
+          <form @submit.prevent="saveRole">
+            <label>
+              コード
+              <input v-model="code" type="text" :disabled="Boolean(editingId && basicRoles.has(code))" required />
+            </label>
+            <label>
+              表示名
+              <input v-model="name" type="text" required />
+            </label>
+            <label>
+              説明
+              <input v-model="description" type="text" />
+            </label>
+            <div class="actions">
+              <button v-if="editingId" type="button" class="secondary" @click="resetForm">キャンセル</button>
+              <button type="submit" :disabled="saving">{{ saving ? '保存中...' : '保存' }}</button>
+            </div>
+          </form>
+        </div>
       </section>
 
       <section class="panel">
         <h2>権限一覧</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>コード</th>
-              <th>表示名</th>
-              <th>説明</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="role in roles" :key="role.id">
-              <td>{{ role.code }}</td>
-              <td>{{ role.name }}</td>
-              <td>{{ role.description || '-' }}</td>
-              <td class="row-actions">
-                <button type="button" class="secondary" @click="startEdit(role)">編集</button>
-                <button type="button" class="danger" :disabled="basicRoles.has(role.code)" @click="removeRole(role)">
-                  削除
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="permission-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>コード</th>
+                <th>表示名</th>
+                <th>説明</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="role in roles" :key="role.id">
+                <td>{{ role.code }}</td>
+                <td>{{ role.name }}</td>
+                <td>{{ role.description || '-' }}</td>
+                <td class="row-actions">
+                  <button type="button" class="secondary" @click="startEdit(role)">編集</button>
+                  <button type="button" class="danger" :disabled="basicRoles.has(role.code)" @click="removeRole(role)">
+                    削除
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   </div>
@@ -236,5 +241,40 @@ button:disabled {
 
 .muted {
   color: #64748b;
+}
+
+/* 権限追加エリア */
+.permission-form-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 権限一覧エリア */
+.permission-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* スマホ表示 */
+@media (max-width: 768px) {
+  .permission-form-scroll > * {
+    min-width: 500px;
+  }
+
+  .permission-table-scroll table {
+    min-width: 500px;
+  }
+
+  /* コード列を途中で改行させない */
+  .permission-table-scroll td:first-child,
+  .permission-table-scroll th:first-child,
+  .permission-table-scroll td:nth-child(2),
+  .permission-table-scroll th:nth-child(2)  {
+    white-space: nowrap;
+  }
 }
 </style>

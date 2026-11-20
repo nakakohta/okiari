@@ -25,50 +25,52 @@ function roleClass(code?: string) {
 <template>
   <div class="table-card">
     <h2>ユーザー一覧</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>名前</th>
-          <th>メール</th>
-          <th>権限</th>
-          <th>状態</th>
-          <th>更新日時</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="user in users" :key="user.id">
-          <td>{{ user.display_name || '-' }}</td>
-          <td>{{ user.email }}</td>
-          <td>
-            <select
-              :value="user.role_id"
-              :disabled="busyUserId === user.id"
-              :class="roleClass(user.role?.code)"
-              @change="$emit('roleChange', user.id, Number(($event.target as HTMLSelectElement).value))"
-            >
-              <option v-for="role in roles" :key="role.id" :value="role.id">
-                {{ role.name }}
-              </option>
-            </select>
-          </td>
-          <td>
-            <button
-              type="button"
-              class="status"
-              :class="user.is_active ? 'active-status' : 'inactive-status'"
-              :disabled="busyUserId === user.id"
-              @click="$emit('statusChange', user.id, !user.is_active)"
-            >
-              {{ user.is_active ? '有効' : '停止' }}
-            </button>
-          </td>
-          <td>{{ user.updated_at ? new Date(user.updated_at).toLocaleString() : '-' }}</td>
-        </tr>
-        <tr v-if="users.length === 0">
-          <td colspan="5" class="empty">ユーザーが登録されていません</td>
-        </tr>
-      </tbody>
-    </table>
+      <div class="user-table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>名前</th>
+            <th>メール</th>
+            <th>権限</th>
+            <th>状態</th>
+            <th>更新日時</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="user in users" :key="user.id">
+            <td>{{ user.display_name || '-' }}</td>
+            <td>{{ user.email }}</td>
+            <td>
+              <select
+                :value="user.role_id"
+                :disabled="busyUserId === user.id"
+                :class="roleClass(user.role?.code)"
+                @change="$emit('roleChange', user.id, Number(($event.target as HTMLSelectElement).value))"
+              >
+                <option v-for="role in roles" :key="role.id" :value="role.id">
+                  {{ role.name }}
+                </option>
+              </select>
+            </td>
+            <td>
+              <button
+                type="button"
+                class="status"
+                :class="user.is_active ? 'active-status' : 'inactive-status'"
+                :disabled="busyUserId === user.id"
+                @click="$emit('statusChange', user.id, !user.is_active)"
+              >
+                {{ user.is_active ? '有効' : '停止' }}
+              </button>
+            </td>
+            <td>{{ user.updated_at ? new Date(user.updated_at).toLocaleString() : '-' }}</td>
+          </tr>
+          <tr v-if="users.length === 0">
+            <td colspan="5" class="empty">ユーザーが登録されていません</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </template>
 
@@ -144,5 +146,26 @@ select {
 .empty {
   color: #64748b;
   text-align: center;
+}
+
+/* ユーザー一覧の横スクロール */
+.user-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* スマホ表示 */
+@media (max-width: 768px) {
+  .user-table-scroll table {
+    min-width: 750px;
+  }
+
+  /* 名前・メール・更新日時を途中で改行しない */
+  .user-table-scroll th,
+  .user-table-scroll td {
+    white-space: nowrap;
+  }
 }
 </style>

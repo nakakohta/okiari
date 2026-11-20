@@ -56,4 +56,22 @@ defineProps<{
   font-weight: 700;
   white-space: nowrap;
 }
+
+/* スマホ表示のみ */
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 16px;
+  }
+
+  .header h1 {
+    font-size: 32px;
+  }
+
+  .add-btn {
+    order: 0;
+  }
+}
+
 </style>

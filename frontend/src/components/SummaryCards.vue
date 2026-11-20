@@ -77,13 +77,39 @@ withDefaults(
 .orange {
   color: #ff7a00;
 }
+
 .blue {
   color: #2563eb;
 }
+
 .green {
   color: #16a34a;
 }
+
 .gray {
   color: #64748b;
+}
+
+/* スマホ表示のみ */
+@media (max-width: 768px) {
+  .cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+  }
+
+  .card {
+    padding: 16px;
+    min-width: 0;
+  }
+
+  .card h3 {
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .card strong {
+    font-size: 28px;
+  }
 }
 </style>

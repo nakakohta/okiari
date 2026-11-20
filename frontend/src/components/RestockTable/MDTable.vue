@@ -238,7 +238,6 @@ const unsubscribeLive = live?.subscribe((change) => {
         <th class="booth-head">売店 <button class="lock" :disabled="!canManageLocks" @click="toggleLock">{{ boothLocked ? '🔒' : '🔓' }}</button></th>
         <th v-for="column in sortedColumns" :key="column.id">
           <input v-model="column.title" :data-live-field="liveFieldKey('md-columns',column.id,'title')" :disabled="!canEditStructure" @input="scheduleColumn(column,$event)" @blur="saveColumn(column)" @compositionstart="composing.add(`column:${column.id}`);live?.beginComposition('md-columns',column.id,'title')" @compositionend="composing.delete(`column:${column.id}`);scheduleColumn(column,$event)" />
-          <button v-if="canDelete" class="small-delete" @click="remove('md-columns', column.id, '列')">×</button>
         </th><th v-if="canDelete"></th>
       </tr></thead>
       <tbody><tr v-for="row in sortedRows" :key="row.id">

@@ -217,5 +217,111 @@ const unsubscribeLive = live?.subscribe((change) => {
 </template>
 
 <style scoped>
-.d-table{position:relative;margin-bottom:28px}.header,.actions,.toolbar{display:flex;align-items:center}.header{justify-content:space-between;gap:16px}.header h3{font-size:20px}.actions{gap:8px}.toolbar{margin:10px 0}.toolbar button,.prepare,.clear{border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}.toolbar button{background:#2563eb;color:#fff}.prepare{background:#e2e8f0}.prepare.active{background:#f59e0b;color:#fff}.clear,.delete{background:#fee2e2;color:#b91c1c}.table-wrap{overflow:auto}table{width:100%;min-width:850px;border-collapse:collapse}th,td{border:1px solid #dbe4ee;padding:8px;text-align:center}th{background:#f8fafc}.lock{border:0;background:transparent;cursor:pointer}input{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px}.status{width:100%;border:0;border-radius:18px;padding:8px;font-weight:700;cursor:pointer}.status.pending{background:#fef3c7;color:#92400e}.status.out_of_stock{background:#fee2e2;color:#b91c1c}.status.completed{background:#dcfce7;color:#166534}.delete{border:0;border-radius:6px;padding:7px}.popup{position:fixed;top:24px;left:50%;z-index:1000;transform:translateX(-50%);background:#172033;color:white;padding:12px 20px;border-radius:8px}.modal-backdrop{position:fixed;inset:0;z-index:1100;display:grid;place-items:center;background:#0007}.modal{display:grid;gap:10px;width:min(360px,90vw);padding:24px;border-radius:14px;background:white}.modal button{padding:12px;border:0;border-radius:8px}.cancel{background:#e2e8f0}button:disabled,input:disabled{cursor:not-allowed;opacity:.55}
+.d-table{
+  position:relative;margin-bottom:28px
+}
+
+.header,.actions,.toolbar{
+  display:flex;align-items:center
+}
+
+.header{
+  justify-content:space-between;gap:16px
+}
+
+.header h3{
+  font-size:20px
+}
+
+.actions{
+  gap:8px
+}
+
+.toolbar{
+  margin:10px 0
+}
+
+.toolbar button,.prepare,.clear{
+  border:0;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer
+}
+
+.toolbar button{
+  background:#2563eb;color:#fff
+}
+
+.prepare{
+  background:#e2e8f0
+}
+
+.prepare.active{
+  background:#f59e0b;color:#fff
+}
+
+.clear,.delete{
+  background:#fee2e2;color:#b91c1c
+}
+
+.table-wrap{overflow:auto}table{
+  width:100%;min-width:850px;border-collapse:collapse
+}
+
+th,td{
+  border:1px solid #dbe4ee;padding:8px;text-align:center
+}
+
+th{
+  background:#f8fafc
+}
+
+.lock{
+  border:0;background:transparent;cursor:pointer
+}
+
+input{
+  box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:6px;padding:8px
+}
+
+.status{
+  width:100%;border:0;border-radius:18px;padding:8px;font-weight:700;cursor:pointer
+}
+
+.status.pending{
+  background:#fef3c7;color:#92400e
+}
+
+.status.out_of_stock{
+  background:#fee2e2;color:#b91c1c
+}
+
+.status.completed{
+  background:#dcfce7;color:#166534
+}
+
+.delete{
+  border:0;border-radius:6px;padding:7px
+}
+
+.popup{
+  position:fixed;top:24px;left:50%;z-index:1000;transform:translateX(-50%);background:#172033;color:white;padding:12px 20px;border-radius:8px
+}
+
+.modal-backdrop{
+  position:fixed;inset:0;z-index:1100;display:grid;place-items:center;background:#0007
+}
+
+.modal{
+  display:grid;gap:10px;width:min(360px,90vw);padding:24px;border-radius:14px;background:white
+}
+
+.modal button{
+  padding:12px;border:0;border-radius:8px
+}
+
+.cancel{
+  background:#e2e8f0
+}
+
+button:disabled,input:disabled{
+  cursor:not-allowed;opacity:.55
+}
 </style>
