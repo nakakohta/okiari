@@ -1,3 +1,4 @@
+
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppHeader from '@/components/AppHeader.vue'
@@ -25,6 +26,7 @@ const note = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const errorMessage = ref('')
+
 const editableStores = computed(() => stores.value.filter(
   (store) => store.is_active && auth.canEditStore(store.id),
 ))
@@ -53,8 +55,10 @@ async function save() {
     errorMessage.value = '場所と商品を選択してください'
     return
   }
+
   saving.value = true
   errorMessage.value = ''
+
   try {
     await reportService.createDrinkRefill({
       store_id: Number(storeId.value),
@@ -76,7 +80,9 @@ async function updateStatus(report: RestockReport, status: RestockStatus) {
   errorMessage.value = ''
   try {
     const updated = await reportService.updateDrinkStatus(report.id, status)
-    reports.value = reports.value.map((item) => (item.id === report.id ? updated : item))
+    reports.value = reports.value.map((item) =>
+      item.id === report.id ? updated : item,
+    )
   } catch {
     errorMessage.value = 'ステータスを更新できませんでした'
   }
@@ -98,84 +104,124 @@ onMounted(load)
 <template>
   <div class="layout">
     <Sidebar />
+
     <main class="content">
-      <AppHeader title="ポップコーン" description="ドリンク補充依頼を登録し、対応状況を管理します。" />
+      <AppHeader
+        title="ポップコーン"
+        description="ドリンク補充依頼を登録し、対応状況を管理します。"
+      />
+
       <p class="realtime-state" :class="realtimeState">
         {{ realtimeState === 'connected' ? '● リアルタイム接続中' : '○ 再接続中' }}
       </p>
-      <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
-      <p v-if="loading" class="muted">読み込み中...</p>
 
-      <form class="panel form-grid" @submit.prevent="save">
-        <label>
-          場所
-          <select v-model.number="storeId" required>
-            <option value="" disabled>選択してください</option>
-            <option v-for="store in editableStores" :key="store.id" :value="store.id">{{ store.name }}</option>
-          </select>
-        </label>
-        <label>
-          商品
-          <select v-model.number="productId" required>
-            <option value="" disabled>選択してください</option>
-            <option v-for="product in products" :key="product.id" :value="product.id">
-              {{ product.name }} / {{ product.unit }}
-            </option>
-          </select>
-        </label>
-        <label>
-          数量
-          <input v-model.number="quantity" type="number" min="1" required />
-        </label>
-        <label class="wide">
-          メモ
-          <input v-model="note" type="text" placeholder="任意" />
-        </label>
-        <button type="submit" :disabled="saving || !auth.canEditReports">
-          {{ auth.canEditReports ? (saving ? '保存中...' : '依頼する') : '閲覧のみ' }}
-        </button>
-      </form>
+      <p v-if="errorMessage" class="error">
+        {{ errorMessage }}
+      </p>
 
+      <p v-if="loading" class="muted">
+        読み込み中...
+      </p>
+
+      <!-- 補充依頼入力フォーム -->
+      <div class="form-scroll">
+        <form class="panel form-grid" @submit.prevent="save">
+          <label>
+            場所
+            <select v-model.number="storeId" required>
+              <option value="" disabled>選択してください</option>
+              <option
+                v-for="store in editableStores"
+                :key="store.id"
+                :value="store.id"
+              >
+                {{ store.name }}
+              </option>
+            </select>
+          </label>
+
+          <label>
+            商品
+            <select v-model.number="productId" required>
+              <option value="" disabled>選択してください</option>
+              <option
+                v-for="product in products"
+                :key="product.id"
+                :value="product.id"
+              >
+                {{ product.name }} / {{ product.unit }}
+              </option>
+            </select>
+          </label>
+
+          <label>
+            数量
+            <input v-model.number="quantity" type="number" min="1" required />
+          </label>
+
+          <label class="wide">
+            メモ
+            <input v-model="note" type="text" placeholder="任意" />
+          </label>
+
+          <button type="submit" :disabled="saving || !auth.canEditReports">
+            {{ auth.canEditReports ? (saving ? '保存中...' : '依頼する') : '閲覧のみ' }}
+          </button>
+        </form>
+      </div>
+
+      <!-- 補充依頼一覧 -->
       <section class="panel">
         <h2>補充依頼一覧</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>依頼日時</th>
-              <th>場所</th>
-              <th>商品</th>
-              <th>数量</th>
-              <th>状態</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="report in reports" :key="report.id">
-              <td>{{ new Date(report.requested_at).toLocaleString() }}</td>
-              <td>{{ report.store?.name || '-' }}</td>
-              <td>{{ report.product?.name || '-' }}</td>
-              <td>{{ report.quantity }}{{ report.product?.unit || '' }}</td>
-              <td>
-                <span class="status" :class="report.status">{{ statusLabels[report.status] }}</span>
-              </td>
-              <td class="actions">
-                <button
-                  v-for="status in Object.keys(statusLabels) as RestockStatus[]"
-                  :key="status"
-                  type="button"
-                  class="secondary"
-                  :disabled="!auth.canEditReports || report.status === status"
-                  @click="updateStatus(report, status)"
-                >
-                  {{ statusLabels[status] }}
-                </button>
-              </td>
-            </tr>
-            <tr v-if="reports.length === 0">
-              <td colspan="6" class="empty">補充依頼はまだありません</td>
-            </tr>
-          </tbody>
-        </table>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>依頼日時</th>
+                <th>場所</th>
+                <th>商品</th>
+                <th>数量</th>
+                <th>状態</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              <tr v-for="report in reports" :key="report.id">
+                <td>{{ new Date(report.requested_at).toLocaleString() }}</td>
+                <td>{{ report.store?.name || '-' }}</td>
+                <td>{{ report.product?.name || '-' }}</td>
+                <td>{{ report.quantity }}{{ report.product?.unit || '' }}</td>
+
+                <td>
+                  <span class="status" :class="report.status">
+                    {{ statusLabels[report.status] }}
+                  </span>
+                </td>
+
+                <td class="actions">
+                  <button
+                    v-for="status in Object.keys(statusLabels) as RestockStatus[]"
+                    :key="status"
+                    type="button"
+                    class="secondary"
+                    :disabled="!auth.canEditReports || report.status === status"
+                    @click="updateStatus(report, status)"
+                  >
+                    {{ statusLabels[status] }}
+                  </button>
+                </td>
+              </tr>
+
+              <tr v-if="reports.length === 0">
+                <td colspan="6" class="empty">
+                  補充依頼はまだありません
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </main>
   </div>
@@ -184,6 +230,7 @@ onMounted(load)
 <style scoped>
 .content {
   flex: 1;
+  min-width: 0;
   padding: 40px;
 }
 
@@ -193,6 +240,7 @@ onMounted(load)
   border-radius: 8px;
   padding: 24px;
   margin-bottom: 24px;
+  min-width: 0;
 }
 
 .form-grid {
@@ -211,6 +259,8 @@ label {
 
 input,
 select {
+  width: 100%;
+  box-sizing: border-box;
   padding: 10px 12px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
@@ -246,9 +296,19 @@ h2 {
   font-weight: 800;
 }
 
+/* テーブル横スクロール */
+.table-scroll {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 table {
   width: 100%;
+  min-width: 850px;
   border-collapse: collapse;
+  white-space: nowrap;
 }
 
 th,
@@ -256,6 +316,7 @@ td {
   padding: 12px;
   border-bottom: 1px solid #eef2f7;
   text-align: left;
+  white-space: nowrap;
 }
 
 .status {
@@ -270,14 +331,17 @@ td {
   background: #dbeafe;
   color: #1d4ed8;
 }
+
 .working {
   background: #fef3c7;
   color: #92400e;
 }
+
 .completed {
   background: #dcfce7;
   color: #15803d;
 }
+
 .cancelled {
   background: #fee2e2;
   color: #b91c1c;
@@ -285,7 +349,7 @@ td {
 
 .actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 
@@ -310,5 +374,70 @@ td {
 
 .realtime-state.connected {
   color: #15803d;
+}
+
+/* スマホ画面 */
+@media screen and (max-width: 768px) {
+  .content {
+    min-width: 0;
+    padding: 16px;
+  }
+
+  .panel {
+    min-width: 0;
+    overflow: hidden;
+    padding: 16px;
+  }
+
+  /* 入力フォームの横スクロール */
+  .form-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 24px;
+  }
+
+  .form-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+    width: max-content;
+    min-width: 520px;
+    gap: 14px;
+    margin-bottom: 0;
+  }
+
+  .form-grid label {
+    min-width: 150px;
+  }
+
+  .form-grid .wide {
+    grid-column: span 2;
+  }
+
+  .form-grid button {
+    min-width: 100px;
+  }
+
+  /* 補充依頼一覧の横スクロール */
+  .table-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  table {
+    min-width: 850px;
+  }
+
+  th,
+  td {
+    white-space: nowrap;
+  }
+
+  .actions {
+    flex-wrap: nowrap;
+  }
 }
 </style>
